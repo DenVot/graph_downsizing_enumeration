@@ -1,0 +1,16 @@
+{
+  "inputs": ["cycle_triangle.txt"],
+  "alpha_step": 0.1,
+  "threads": 32,
+  "combination_chunk_size": 256,
+  "working_directory": "../runs",
+  "checkpoint_interval_seconds": 60,
+  "github": {
+    "enabled": false,
+    "repository_url": "https://github.com/DenVot/graph_downsizing_enumeration.git",
+    "branch": "runs",
+    "username": "x-access-token",
+    "token_env": "GRAPH_DOWNSIZING_GITHUB_TOKEN",
+    "upload_interval_seconds": 300
+  }
+}
