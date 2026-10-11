@@ -1,6 +1,7 @@
 #include "graph_downsizing/worker_pool.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace downsizing {
 WorkerPool::WorkerPool(std::size_t threads) {
@@ -25,31 +26,36 @@ void WorkerPool::stop() {
 WorkerPool::~WorkerPool() { stop(); }
 
 void WorkerPool::worker() {
-    std::size_t generation = 0;
     std::unique_lock lock(mutex_);
     for (;;) {
-        ready_.wait(lock, [&] { return stopping_ || generation != generation_; });
-        if (stopping_) return;
-        generation = generation_;
+        ready_.wait(lock, [&] { return stopping_ || !jobs_.empty(); });
+        if (jobs_.empty()) return;
+        auto job = std::move(jobs_.front());
+        jobs_.pop_front();
+        ++active_;
         lock.unlock();
         std::exception_ptr error;
-        try { job_(); } catch (...) { error = std::current_exception(); }
+        try { job(); } catch (...) { error = std::current_exception(); }
+        job = {};
         lock.lock();
         if (error && !error_) error_ = error;
-        if (--remaining_ == 0) finished_.notify_one();
+        --active_;
+        if (jobs_.empty() && active_ == 0) finished_.notify_one();
     }
 }
 
-void WorkerPool::run(std::function<void()> job) {
+void WorkerPool::submit(std::function<void()> job) {
+    if (!job) throw std::invalid_argument("Cannot submit an empty task");
     std::unique_lock lock(mutex_);
-    if (!job || remaining_ != 0) throw std::invalid_argument("Pool requires one nonempty coordinator job at a time");
-    job_ = std::move(job);
-    error_ = nullptr;
-    remaining_ = workers_.size();
-    ++generation_;
-    ready_.notify_all();
-    finished_.wait(lock, [&] { return remaining_ == 0; });
-    job_ = {};
-    if (error_) std::rethrow_exception(error_);
+    if (stopping_) throw std::logic_error("Cannot submit to a stopped pool");
+    jobs_.push_back(std::move(job));
+    ready_.notify_one();
+}
+
+void WorkerPool::wait() {
+    std::unique_lock lock(mutex_);
+    finished_.wait(lock, [&] { return jobs_.empty() && active_ == 0; });
+    const auto error = std::exchange(error_, nullptr);
+    if (error) std::rethrow_exception(error);
 }
 } // namespace downsizing

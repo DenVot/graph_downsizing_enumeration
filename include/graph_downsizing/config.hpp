@@ -19,10 +19,10 @@ struct GitHubConfig {
 };
 
 struct Config {
+    // Expanded input files. Their filename stems are stable graph IDs.
     std::vector<std::filesystem::path> inputs;
     double alpha_step = 0.1;
     std::size_t threads = 1;
-    std::size_t combination_chunk_size = 256;
     std::filesystem::path working_directory;
     std::chrono::seconds checkpoint_interval{60};
     GitHubConfig github;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(graph_downsizing_enumeration VERSION 0.4.0 LANGUAGES CXX)
+project(graph_downsizing_enumeration VERSION 0.5.0 LANGUAGES CXX)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
@@ -14,6 +14,7 @@ if(GRAPH_DOWNSIZING_SANITIZERS AND GRAPH_DOWNSIZING_THREAD_SANITIZER)
 endif()
 
 add_library(graph_downsizing_core
+    src/checkpoint.cpp
     src/combinations.cpp
     src/parallel_search.cpp
     src/worker_pool.cpp
@@ -30,7 +31,7 @@ add_library(graph_downsizing_core
 target_compile_features(graph_downsizing_core PUBLIC cxx_std_20)
 set_target_properties(graph_downsizing_core PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(graph_downsizing_core PUBLIC include)
-target_link_libraries(graph_downsizing_core PRIVATE nlohmann_json::nlohmann_json PUBLIC Boost::headers Threads::Threads)
+target_link_libraries(graph_downsizing_core PUBLIC nlohmann_json::nlohmann_json Boost::headers Threads::Threads)
 
 function(graph_downsizing_compile_options target)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -54,6 +55,15 @@ target_compile_definitions(graph_downsizing PRIVATE GRAPH_DOWNSIZING_VERSION="${
 graph_downsizing_compile_options(graph_downsizing)
 
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME checkpoint_process COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/checkpoint_process.py $<TARGET_FILE:graph_downsizing>)
+    set_tests_properties(checkpoint_process PROPERTIES TIMEOUT 240)
+    add_executable(graph_downsizing_checkpoint_tests tests/test_checkpoint.cpp)
+    target_link_libraries(graph_downsizing_checkpoint_tests PRIVATE graph_downsizing_core)
+    graph_downsizing_compile_options(graph_downsizing_checkpoint_tests)
+    add_test(NAME checkpoint COMMAND graph_downsizing_checkpoint_tests)
+    set_tests_properties(checkpoint PROPERTIES TIMEOUT 60)
     add_executable(graph_downsizing_tests tests/test_core.cpp)
     target_link_libraries(graph_downsizing_tests PRIVATE graph_downsizing_core)
     graph_downsizing_compile_options(graph_downsizing_tests)

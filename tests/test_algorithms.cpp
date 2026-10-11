@@ -2,6 +2,7 @@
 #include "graph_downsizing/global_cut.hpp"
 #include "graph_downsizing/tree.hpp"
 #include "graph_downsizing/solver.hpp"
+#include "graph_downsizing/parallel_search.hpp"
 #include "graph_downsizing/maximal_kvcc_enumerator.hpp"
 
 #include <algorithm>
@@ -714,7 +715,7 @@ void test_tree() {
     std::cout << count << " connected exhaustive graphs; every minimum size; random connected cases; cycle plus triangle; overlapping K4\n";
 }
 
-void verify_solver(const Oracle& oracle, WorkerPool* pool = nullptr) {
+void verify_solver(const Oracle& oracle, WorkerPool& single_pool, WorkerPool& pool) {
     const auto n = oracle.adjacency.size();
     const auto vertices = labels(n);
     const auto table = oracle_table(oracle);
@@ -734,10 +735,9 @@ void verify_solver(const Oracle& oracle, WorkerPool* pool = nullptr) {
     const auto full = (Mask{1} << n) - 1;
     if (n < 2 || !oracle.connected(full)) return;
     const auto graph = Graph::from_edges(edges(oracle, vertices));
-    ExactSolver solver(graph, 1);
-    ExactSolver pruned(graph, (n + 1) / 2);
-    std::unique_ptr<ExactSolver> parallel;
-    if (pool) parallel = std::make_unique<ExactSolver>(graph, 1, *pool, 1);
+    ExactSolver solver(graph, 1, single_pool);
+    ExactSolver pruned(graph, (n + 1) / 2, single_pool);
+    ExactSolver parallel(graph, 1, pool);
     for (std::size_t r = n; r > 0; --r) {
         std::size_t optimum = 0;
         for (Mask subset = 1; subset < table.size(); ++subset) {
@@ -756,8 +756,8 @@ void verify_solver(const Oracle& oracle, WorkerPool* pool = nullptr) {
         const auto count = solver.solutions().size();
         check(&solver.solve(r) == &answer && solver.solutions().size() == count, "Repeated r must reuse stored answer");
         if (r >= (n + 1) / 2) check(pruned.solve(r).connectivity == optimum, "Pruned hierarchy lost the optimum");
-        if (parallel) {
-            const auto& result = parallel->solve(r);
+        {
+            const auto& result = parallel.solve(r);
             Mask mask = 0;
             for (const auto vertex : result.vertices) {
                 const auto found = std::find(vertices.begin(), vertices.end(), vertex);
@@ -770,28 +770,84 @@ void verify_solver(const Oracle& oracle, WorkerPool* pool = nullptr) {
     }
 }
 
+// Expected optima and ALL allowed witnesses below are fixed by hand, not computed
+// by another solver. Each row checks the number and the actual induced subgraph.
+void test_known_solver_answers() {
+    struct Answer {
+        std::size_t r;
+        std::size_t k;
+        std::vector<VertexSet> witnesses;
+    };
+    struct Fixture {
+        const char* name;
+        std::vector<std::pair<Vertex, Vertex>> edges;
+        std::vector<Answer> answers;
+    };
+    const std::vector<Fixture> fixtures{
+        {"edge", {{1,2}}, {
+            {1,0,{{1},{2}}}, {2,1,{{1,2}}}}},
+        // Any connected induced subset of a tree with at least two vertices has k=1.
+        {"path", {{1,2},{2,3},{3,4}}, {
+            {1,0,{{1},{2},{3},{4}}}, {2,1,{{1,2},{2,3},{3,4}}},
+            {3,1,{{1,2,3},{2,3,4}}}, {4,1,{{1,2,3,4}}}}},
+        // Every r-subset is a clique with connectivity r-1.
+        {"clique", {{1,2},{1,3},{1,4},{2,3},{2,4},{3,4}}, {
+            {1,0,{{1},{2},{3},{4}}}, {2,1,{{1,2},{1,3},{1,4},{2,3},{2,4},{3,4}}},
+            {3,2,{{1,2,3},{1,2,4},{1,3,4},{2,3,4}}}, {4,3,{{1,2,3,4}}}}},
+        // A proper connected subset of C4 is a path; the whole cycle has k=2.
+        {"cycle", {{1,2},{2,3},{3,4},{4,1}}, {
+            {1,0,{{1},{2},{3},{4}}}, {2,1,{{1,2},{2,3},{3,4},{1,4}}},
+            {3,1,{{1,2,3},{1,2,4},{1,3,4},{2,3,4}}}, {4,2,{{1,2,3,4}}}}},
+        // Two triangles sharing vertex 1: either triangle has k=2;
+        // any connected larger subset has articulation vertex 1.
+        {"overlapping triangles", {{1,2},{2,3},{3,1},{1,4},{4,5},{5,1}}, {
+            {1,0,{{1},{2},{3},{4},{5}}}, {2,1,{{1,2},{2,3},{1,3},{1,4},{4,5},{1,5}}},
+            {3,2,{{1,2,3},{1,4,5}}},
+            {4,1,{{1,2,3,4},{1,2,3,5},{1,2,4,5},{1,3,4,5}}}, {5,1,{{1,2,3,4,5}}}}},
+        // A bridge joins C6 and K3. The triangle is the only 3-vertex k=2 witness;
+        // C6 is the only 6-vertex k=2 witness. Sizes 4,5,7,8,9 have optimum 1.
+        {"cycle plus triangle", {{10,20},{20,30},{30,40},{40,50},{50,60},{60,10},
+                                 {70,80},{80,90},{90,70},{10,70}}, {
+            {3,2,{{70,80,90}}}, {6,2,{{10,20,30,40,50,60}}},
+            {9,1,{{10,20,30,40,50,60,70,80,90}}}}}
+    };
+    WorkerPool single(1);
+    WorkerPool multiple(4);
+    for (const auto& fixture : fixtures) {
+        const auto graph = Graph::from_edges(fixture.edges);
+        ExactSolver one_worker(graph, 1, single);
+        ExactSolver four_workers(graph, 1, multiple);
+        for (auto* solver : {&one_worker, &four_workers}) {
+            for (const auto& expected : fixture.answers) {
+                const auto& actual = solver->solve(expected.r);
+                auto vertices = actual.vertices;
+                std::sort(vertices.begin(), vertices.end());
+                if (actual.connectivity != expected.k || vertices.size() != expected.r ||
+                    std::find(expected.witnesses.begin(), expected.witnesses.end(), vertices) == expected.witnesses.end()) {
+                    throw std::runtime_error(std::string("Known answer mismatch: ") + fixture.name +
+                                             ", r=" + std::to_string(expected.r));
+                }
+            }
+        }
+    }
+}
+
 void test_solver() {
+    test_known_solver_answers();
+    WorkerPool single_pool(1);
     WorkerPool pool(4);
-    all_small_graphs([&](const Oracle& oracle) { verify_solver(oracle, &pool); });
-    random_graphs([&](const Oracle& oracle) { verify_solver(oracle, &pool); });
+    all_small_graphs([&](const Oracle& oracle) { verify_solver(oracle, single_pool, pool); });
+    random_graphs([&](const Oracle& oracle) { verify_solver(oracle, single_pool, pool); });
     const auto graph = Graph::from_edges({{10,20},{20,30},{30,40},{40,50},{50,60},{60,10},
                                           {70,80},{80,90},{90,70},{10,70}});
-    ExactSolver solver(graph, 1);
-    WorkerPool single_pool(1);
-    ExactSolver one_worker(graph, 1, single_pool, 2);
-    ExactSolver four_workers(graph, 1, pool, 1);
-    for (std::size_t r = 1; r <= graph.vertex_count(); ++r) {
-        check(one_worker.solve(r).connectivity == solver.solve(r).connectivity &&
-              four_workers.solve(r).connectivity == solver.solve(r).connectivity,
-              "One and four workers must give the same optimum");
-    }
+    ExactSolver solver(graph, 1, single_pool);
     check(solver.solve(3).vertices == VertexSet({70,80,90}), "Must try the smaller triangle after exhausting the cycle node");
     check(solver.solve(4).connectivity == 1 && solver.solve(6).connectivity == 2 && solver.solve(9).connectivity == 1,
           "Cycle/triangle fallback and full-size cases");
     check(p_downsize(graph, {90,80,70}, 3, 2) == std::optional<VertexSet>({70,80,90}), "Node ordering must be normalized");
     expect_error([&] { static_cast<void>(solver.solve(0)); });
     expect_error([&] { static_cast<void>(solver.solve(10)); });
-    ExactSolver pruned(graph, 4);
+    ExactSolver pruned(graph, 4, single_pool);
     expect_error([&] { static_cast<void>(pruned.solve(3)); });
     expect_error([&] { static_cast<void>(p_downsize(graph, {10,20}, 0, 1)); });
     expect_error([&] { static_cast<void>(p_downsize(graph, {10,20}, 3, 1)); });

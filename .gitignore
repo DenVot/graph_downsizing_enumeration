@@ -9,3 +9,9 @@
 *.zip.part*
 .DS_Store
 .cache
+
+*.sqlite.lock
+*.sqlite.tmp
+*.sqlite.import.tmp
+
+.checkpoint.lock

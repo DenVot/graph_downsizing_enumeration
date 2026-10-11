@@ -15,8 +15,9 @@ public:
 
     // The graph must outlive the enumerator.
     // Without a substitution, uses Wen Algorithm 3 (GLOBAL-CUT*) with inherited strong-side information.
-    explicit MaximalKVCCEnumerator(const Graph& graph, GlobalCut global_cut = {})
-        : graph_(graph), global_cut_(std::move(global_cut)) {}
+    explicit MaximalKVCCEnumerator(const Graph& graph, GlobalCut global_cut = {},
+                                   std::function<void()> poll = {})
+        : graph_(graph), global_cut_(std::move(global_cut)), poll_(std::move(poll)) {}
 
     // All inclusion-maximal induced k-  subsets, sorted lexicographically.
     [[nodiscard]] std::vector<VertexSet> enumerate(const VertexSet& vertices, std::size_t k) const;
@@ -31,6 +32,7 @@ private:
 
     const Graph& graph_;
     GlobalCut global_cut_;
+    std::function<void()> poll_;
 };
 
 } // namespace downsizing

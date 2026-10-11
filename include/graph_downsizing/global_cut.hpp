@@ -2,6 +2,7 @@
 
 #include "graph_downsizing/connectivity.hpp"
 
+#include <functional>
 #include <memory>
 #include <set>
 
@@ -41,6 +42,7 @@ using StrongSideCache = std::shared_ptr<const StrongSideInfo>;
 // Recheck every separator vertex, plus parent strong vertices adjacent to the separator.
 [[nodiscard]] VertexSet find_global_cut_reusing(const Graph& graph, const VertexSet& vertices,
                                                std::size_t k, StrongSideCache& cache,
-                                               GlobalCutStats& stats);
+                                               GlobalCutStats& stats,
+                                               const std::function<void()>& poll = {});
 
 } // namespace downsizing

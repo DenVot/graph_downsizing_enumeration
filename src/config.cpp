@@ -147,7 +147,7 @@ Config read_config(const std::filesystem::path& path) {
     if (input.bad()) {
         throw std::runtime_error("Failed to read configuration file");
     }
-    check_keys(document, {"inputs", "alpha_step", "threads", "combination_chunk_size", "working_directory",
+    check_keys(document, {"inputs", "input_directory", "alpha_step", "threads", "working_directory",
                           "checkpoint_interval_seconds", "github"}, "configuration");
 
     Config config{};
@@ -161,27 +161,52 @@ Config read_config(const std::filesystem::path& path) {
     (void)AlphaSchedule(config.alpha_step, 1);
     config.threads = static_cast<std::size_t>(positive_field(document, "threads",
         std::max(1U, std::thread::hardware_concurrency()), std::numeric_limits<std::size_t>::max()));
-    config.combination_chunk_size = static_cast<std::size_t>(positive_field(document, "combination_chunk_size",
-        256, std::numeric_limits<std::size_t>::max()));
     config.working_directory = resolve_path(base, string_field(document, "working_directory", "runs"));
     constexpr auto max_seconds = static_cast<std::uint64_t>(std::chrono::seconds::max().count());
     config.checkpoint_interval = std::chrono::seconds(static_cast<std::chrono::seconds::rep>(
         positive_field(document, "checkpoint_interval_seconds", 60, max_seconds)));
 
-    const auto files = document.find("inputs");
-    if (files == document.end() || !files->is_array() || files->empty()) {
-        throw std::invalid_argument("inputs must be a nonempty array of file paths");
+    if (document.contains("inputs") == document.contains("input_directory")) {
+        throw std::invalid_argument("Specify exactly one of inputs and input_directory");
     }
-    std::set<std::filesystem::path> unique_inputs;
-    for (const auto& file : *files) {
-        if (!file.is_string() || file.get_ref<const std::string&>().empty()) {
-            throw std::invalid_argument("Every input path must be a nonempty string");
+    if (document.contains("input_directory")) {
+        const auto folder = resolve_path(base, string_field(document, "input_directory", ""));
+        if (!std::filesystem::is_directory(folder)) {
+            throw std::invalid_argument("input_directory must be an existing directory");
         }
-        auto resolved = resolve_path(base, file.get<std::string>());
-        if (!unique_inputs.insert(resolved).second) {
-            throw std::invalid_argument("inputs must not contain duplicate paths");
+        for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt") {
+                config.inputs.push_back(entry.path());
+            }
         }
-        config.inputs.push_back(std::move(resolved));
+        std::sort(config.inputs.begin(), config.inputs.end(), [](const auto& left, const auto& right) {
+            return left.filename().native() < right.filename().native();
+        });
+        if (config.inputs.empty()) {
+            throw std::invalid_argument("input_directory contains no .txt files");
+        }
+    } else {
+        const auto& files = document.at("inputs");
+        if (!files.is_array() || files.empty()) {
+            throw std::invalid_argument("inputs must be a nonempty array of file paths");
+        }
+        std::set<std::filesystem::path> unique_inputs;
+        for (const auto& file : files) {
+            if (!file.is_string() || file.get_ref<const std::string&>().empty()) {
+                throw std::invalid_argument("Every input path must be a nonempty string");
+            }
+            auto resolved = resolve_path(base, file.get<std::string>());
+            if (!unique_inputs.insert(resolved).second) {
+                throw std::invalid_argument("inputs must not contain duplicate paths");
+            }
+            config.inputs.push_back(std::move(resolved));
+        }
+    }
+    std::set<std::filesystem::path> names;
+    for (const auto& input_file : config.inputs) {
+        if (!names.insert(input_file.stem()).second) {
+            throw std::invalid_argument("Input filenames must be unique without extensions: stems are graph IDs");
+        }
     }
 
     const auto github = document.find("github");
@@ -212,7 +237,7 @@ Config read_config(const std::filesystem::path& path) {
 
 std::filesystem::path solution_path(const Config& config, std::size_t input_index) {
     const auto& input = config.inputs.at(input_index);
-    return config.working_directory / ("graph_" + std::to_string(input_index)) / (input.stem().string() + "_sol.txt");
+    return config.working_directory / input.stem() / (input.stem().string() + "_sol.txt");
 }
 
 } // namespace downsizing

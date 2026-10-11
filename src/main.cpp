@@ -1,4 +1,5 @@
 #include "graph_downsizing/alpha.hpp"
+#include "graph_downsizing/checkpoint.hpp"
 #include "graph_downsizing/config.hpp"
 #include "graph_downsizing/graph.hpp"
 #include "graph_downsizing/tree.hpp"
@@ -16,18 +17,18 @@
 namespace {
 
 void help() {
-    std::cout << "graph_downsizing " GRAPH_DOWNSIZING_VERSION " (stage 4)\n"
+    std::cout << "graph_downsizing " GRAPH_DOWNSIZING_VERSION " (stage 5)\n"
                  "Usage:\n"
                  "  graph_downsizing validate --config FILE\n"
                  "  graph_downsizing tree --config FILE\n"
                  "  graph_downsizing run --config FILE\n"
-                 "  graph_downsizing resume --checkpoint FILE --config FILE\n"
+                 "  graph_downsizing resume --checkpoint DIRECTORY --config FILE\n"
                  "  graph_downsizing --help\n"
                  "  graph_downsizing --version\n\n"
                  "validate reads inputs and previews up to 20 alpha/r tasks per graph.\n"
                  "tree builds the exact hierarchy and previews up to 20 nodes per graph.\n"
                  "run solves alpha/r tasks using a shared worker pool and writes solution files.\n"
-                 "resume is reserved for the checkpoint stage.\n";
+                 "resume continues from a JSON checkpoint; active nodes resume at their saved subset.\n";
 }
 
 struct Arguments {
@@ -129,9 +130,17 @@ void inspect_tree(const downsizing::Config& config) {
     }
 }
 
-void run(const downsizing::Config& config) {
-    if (config.github.enabled) throw std::invalid_argument("GitHub upload is not implemented yet; set github.enabled=false");
-    // Check every destination before writing, including collisions with a later input.
+void run(const downsizing::Config& config, const std::filesystem::path& resume,
+         const std::filesystem::path& config_path) {
+    const bool restoring = !resume.empty();
+    const auto checkpoint_path = restoring ? resume : config.working_directory;
+    std::vector<std::filesystem::path> reserved{checkpoint_path / ".checkpoint.lock"};
+    for (std::size_t i = 0; i < config.inputs.size(); ++i) {
+        const auto folder = checkpoint_path / config.inputs[i].stem();
+        for (const auto name : {"tree.json", "tree.json.tmp", "progress.json", "progress.json.tmp"}) {
+            reserved.push_back(folder / name);
+        }
+    }
     std::set<std::filesystem::path> destinations;
     for (std::size_t i = 0; i < config.inputs.size(); ++i) {
         const auto destination = downsizing::solution_path(config, i);
@@ -150,27 +159,73 @@ void run(const downsizing::Config& config) {
             }
         }
     }
-    downsizing::WorkerPool pool(config.threads);
-    std::cout << "Parallel solver: workers=" << pool.size()
-              << "; checkpoints/resume are not implemented yet.\n";
-    for (std::size_t i = 0; i < config.inputs.size(); ++i) {
-        const auto graph = downsizing::read_graph(config.inputs[i]);
-        downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
-        auto task = schedule.next();
-        std::cout << "Building tree: graph=" << config.inputs[i].string() << " minimum_r=" << task->r << std::endl;
-        downsizing::ExactSolver solver(graph, task->r, pool, config.combination_chunk_size);
-        std::cout << "nodes=" << solver.tree().nodes.size() << " maximum_k=" << solver.tree().levels.size() - 1 << std::endl;
-        const auto destination = downsizing::solution_path(config, i);
-        do {
-            const bool reused = solver.solutions().contains(task->r);
-            std::cout << std::setprecision(15) << "alpha=" << task->alpha << " r=" << task->r << std::flush;
-            const auto& solution = solver.solve(task->r);
-            if (!reused) downsizing::save_solution_file(destination, graph, config.alpha_step, solver.solutions());
-            std::cout << " k=" << solution.connectivity << (reused ? " reused" : " computed");
-            if (task->r == 1) std::cout << " vertex=" << solution.vertices.front();
-            std::cout << std::endl;
-        } while ((task = schedule.next()));
-        std::cout << "output=" << destination.string() << " unique_sizes=" << solver.solutions().size() << std::endl;
+    for (const auto& file : reserved) {
+        const auto canonical = std::filesystem::weakly_canonical(file);
+        if (!destinations.insert(canonical).second || canonical == std::filesystem::weakly_canonical(config_path)) {
+            throw std::invalid_argument("Checkpoint paths must not overwrite configuration or solution files");
+        }
+        for (const auto& input : config.inputs) {
+            if (canonical == std::filesystem::weakly_canonical(input)) {
+                throw std::invalid_argument("Checkpoint must not overwrite an input graph");
+            }
+        }
+    }
+    if (destinations.contains(std::filesystem::weakly_canonical(config_path))) {
+        throw std::invalid_argument("Output must not overwrite configuration");
+    }
+    downsizing::install_stop_handlers();
+    // Input graphs remain external and must be unchanged when resuming.
+    std::vector<nlohmann::json> metadata;
+    for (const auto& input : config.inputs) {
+        metadata.push_back({
+            {"algorithm", "node-cursor-v1"},
+            {"input", input.filename().string()},
+            {"alpha_step", config.alpha_step}
+        });
+    }
+    downsizing::Checkpoint checkpoint(checkpoint_path, restoring, config.checkpoint_interval, metadata);
+    std::cout << "checkpoint=" << checkpoint.path().string() << std::endl;
+    try {
+        downsizing::WorkerPool pool(config.threads);
+        std::cout << "Parallel solver: workers=" << pool.size()
+                  << "; JSON checkpoint enabled.\n";
+        for (std::size_t i = 0; i < config.inputs.size(); ++i) {
+            const auto graph = downsizing::read_graph(config.inputs[i]);
+            downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
+            auto task = schedule.next();
+            std::cout << "Building tree: graph=" << config.inputs[i].string() << " minimum_r=" << task->r << std::endl;
+            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, config.inputs[i].stem().string());
+            std::cout << "nodes=" << solver.tree().nodes.size() << " maximum_k=" << solver.tree().levels.size() - 1 << std::endl;
+            const auto destination = downsizing::solution_path(config, i);
+            if (restoring) {
+                // A killed process may have left an unfinished atomic output replacement.
+                auto temporary = destination;
+                temporary += ".tmp";
+                std::filesystem::remove(temporary);
+            }
+            do {
+                const bool reused = solver.solutions().contains(task->r);
+                std::cout << std::setprecision(15) << "alpha=" << task->alpha << " r=" << task->r << std::flush;
+                const auto& solution = solver.solve(task->r);
+                if (!reused) {
+                    downsizing::save_solution_file(destination, graph, config.alpha_step, solver.solutions());
+                }
+                std::cout << " k=" << solution.connectivity << (reused ? " reused" : " computed");
+                if (task->r == 1) {
+                    std::cout << " vertex=" << solution.vertices.front();
+                }
+                std::cout << std::endl;
+            } while ((task = schedule.next()));
+            std::cout << "output=" << destination.string() << " unique_sizes=" << solver.solutions().size() << std::endl;
+        }
+        checkpoint.flush();
+    } catch (const downsizing::Interrupted&) {
+        checkpoint.flush();
+        throw;
+    } catch (...) {
+        const auto error = std::current_exception();
+        checkpoint.flush(); // A disk error here is fatal and takes precedence.
+        std::rethrow_exception(error);
     }
 }
 
@@ -192,20 +247,19 @@ int main(int argc, char** argv) {
         std::cerr << "Usage error: " << error.what() << '\n';
         return 2;
     }
-    if (arguments.command == "resume") {
-        std::cerr << "resume is not implemented in stage 4.\n";
-        return 3;
-    }
     try {
         const auto config = downsizing::read_config(arguments.config);
-        if (arguments.command == "run") {
-            run(config);
+        if (arguments.command == "run" || arguments.command == "resume") {
+            run(config, arguments.checkpoint, arguments.config);
         } else if (arguments.command == "tree") {
             inspect_tree(config);
         } else {
             validate(config);
         }
         return 0;
+    } catch (const downsizing::Interrupted& error) {
+        std::cerr << error.what() << '\n';
+        return 130;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
         return 1;

@@ -123,23 +123,21 @@ void test_config() {
     TemporaryDirectory directory;
     auto file = directory.write("config.json", R"({"inputs":["data/g.txt"]})");
     const auto config = downsizing::read_config(file);
-    check(config.combination_chunk_size == 256, "Default chunk size failed");
     check(config.alpha_step == 0.1 && config.threads >= 1, "Default step or threads failed");
     check(config.checkpoint_interval.count() == 60 && config.github.upload_interval.count() == 300, "Default intervals failed");
     check(config.inputs[0] == directory.path() / "data/g.txt", "Input paths must be relative to the config file");
     check(config.working_directory == directory.path() / "runs", "Working directory default failed");
     check(!config.github.enabled && config.github.branch == "runs", "GitHub defaults failed");
-    check(downsizing::solution_path(config, 0) == directory.path() / "runs/graph_0/g_sol.txt", "Result path failed");
+    check(downsizing::solution_path(config, 0) == directory.path() / "runs/g/g_sol.txt", "Result path failed");
 
     file = directory.write("configured.json", R"({
-        "inputs": ["data/g.txt", "other/g.txt"], "alpha_step": 0.3,
-        "threads": 32, "combination_chunk_size": 7, "working_directory": "work/../answers",
+        "inputs": ["data/g.txt", "other/h.txt"], "alpha_step": 0.3,
+        "threads": 32, "working_directory": "work/../answers",
         "checkpoint_interval_seconds": 7,
         "github": {"enabled":true, "repository_url":"https://github.com/DenVot/graph_downsizing_enumeration.git",
                    "branch":"runs/test", "token_env":"CUSTOM_TOKEN", "upload_interval_seconds":19}
     })");
     const auto configured = downsizing::read_config(file);
-    check(configured.combination_chunk_size == 7, "Configured chunk size failed");
     check(configured.alpha_step == 0.3 && configured.threads == 32, "Configured values failed");
     check(configured.working_directory == directory.path() / "answers", "Path normalization failed");
     check(configured.github.enabled && configured.github.token.empty() && configured.github.token_env == "CUSTOM_TOKEN",
@@ -147,9 +145,27 @@ void test_config() {
     check(configured.checkpoint_interval.count() == 7 && configured.github.upload_interval.count() == 19,
           "Configured intervals failed");
     check(downsizing::solution_path(configured, 0) != downsizing::solution_path(configured, 1),
-          "Equal basenames in different directories must not collide");
+          "Different graph filenames must have separate output directories");
+
+    (void)directory.write("graphs/z.txt", "1 2\n");
+    (void)directory.write("graphs/a ~.txt", "1 2\n");
+    (void)directory.write("graphs/ignore.csv", "not a graph");
+    (void)directory.write("graphs/nested/skip.txt", "1 2\n");
+    std::filesystem::create_directories(directory.path() / "graphs/folder.txt");
+    file = directory.write("folder.json", R"({"input_directory":"graphs"})");
+    const auto scanned = downsizing::read_config(file);
+    check(scanned.inputs == std::vector<std::filesystem::path>{
+              directory.path() / "graphs/a ~.txt", directory.path() / "graphs/z.txt"},
+          "Directory inputs must be sorted, nonrecursive, regular .txt files");
+    std::filesystem::create_directories(directory.path() / "empty");
 
     const std::vector<std::pair<std::string, std::string>> invalid{
+        {R"({"input_directory":"missing"})", "existing directory"},
+        {R"({"input_directory":"empty"})", "no .txt files"},
+        {R"({"input_directory":12})", "nonempty string"},
+        {R"({"input_directory":"graphs","inputs":["g.txt"]})", "exactly one"},
+        {R"({"inputs":["one/g.txt","two/g.txt"]})", "filenames must be unique"},
+        {R"({"inputs":["one/g.txt","two/g.dat"]})", "filenames must be unique"},
         {"{", "valid JSON"}, {"[]", "JSON object"}, {"{}", "inputs"},
         {R"({"inputs":[]})", "inputs"}, {R"({"inputs":[12]})", "input path"},
         {R"({"inputs":[""]})", "input path"},
@@ -157,8 +173,7 @@ void test_config() {
         {R"({"inputs":["a.txt"],"alpha_step":"0.1"})", "alpha_step"},
         {R"({"inputs":["a.txt"],"alpha_step":0})", "alpha_step"},
         {R"({"inputs":["a.txt"],"alpha_step":true})", "alpha_step"},
-        {R"({"inputs":["a.txt"],"combination_chunk_size":0})", "combination_chunk_size"},
-        {R"({"inputs":["a.txt"],"combination_chunk_size":1.5})", "combination_chunk_size"},
+        {R"({"inputs":["a.txt"],"combination_chunk_size":256})", "Unknown field"},
         {R"({"inputs":["a.txt"],"threads":0})", "threads"},
         {R"({"inputs":["a.txt"],"threads":-1})", "threads"},
         {R"({"inputs":["a.txt"],"threads":1.5})", "threads"},

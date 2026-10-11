@@ -13,6 +13,7 @@ VertexSet MaximalKVCCEnumerator::k_core(const VertexSet& vertices, std::size_t k
     std::map<Vertex, std::size_t> degree;
     VertexSet queue;
     for (const Vertex vertex : vertices) {
+        if (poll_) poll_();
         auto& count = degree[vertex];
         for (const Vertex neighbor : graph_.neighbors(vertex)) {
             count += active.contains(neighbor) ? 1U : 0U;
@@ -22,6 +23,7 @@ VertexSet MaximalKVCCEnumerator::k_core(const VertexSet& vertices, std::size_t k
         }
     }
     for (std::size_t head = 0; head < queue.size(); ++head) {
+        if (poll_) poll_();
         const Vertex vertex = queue[head];
         active.erase(vertex);
         for (const Vertex neighbor : graph_.neighbors(vertex)) {
@@ -40,6 +42,7 @@ std::vector<VertexSet> MaximalKVCCEnumerator::connected_components(const VertexS
         VertexSet queue{*remaining.begin()};
         remaining.erase(queue.front());
         for (std::size_t head = 0; head < queue.size(); ++head) {
+        if (poll_) poll_();
             for (const Vertex neighbor : graph_.neighbors(queue[head])) {
                 if (remaining.erase(neighbor) > 0) {
                     queue.push_back(neighbor);
@@ -72,7 +75,7 @@ VertexSet MaximalKVCCEnumerator::global_cut(const VertexSet& vertices, std::size
                                            StrongSideCache& cache) const {
     GlobalCutStats stats;
     auto separator = ordered_subset(graph_, global_cut_ ? global_cut_(graph_, vertices, k)
-                                                       : find_global_cut_reusing(graph_, vertices, k, cache, stats));
+                                                       : find_global_cut_reusing(graph_, vertices, k, cache, stats, poll_));
     if (separator.size() >= k ||
         !std::includes(vertices.begin(), vertices.end(), separator.begin(), separator.end())) {
         throw std::logic_error("GLOBAL_CUT must return a subset of the component with size < k");
@@ -92,11 +95,13 @@ std::vector<VertexSet> MaximalKVCCEnumerator::enumerate(const VertexSet& vertice
     std::vector<Task> pending{{ordered_subset(graph_, vertices), {}}};
     std::vector<VertexSet> found;
     while (!pending.empty()) {
+        if (poll_) poll_();
         auto task = std::move(pending.back());
         pending.pop_back();
         auto core = k_core(task.vertices, k);
         // Lines 3-4: split connected components before invoking GLOBAL_CUT.
         for (auto& component : connected_components(core)) {
+            if (poll_) poll_();
             auto cache = task.parent;
             const auto separator = global_cut(component, k, cache);
             if (separator.empty()) {

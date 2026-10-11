@@ -1,8 +1,7 @@
 {
-  "inputs": ["cycle_triangle.txt"],
+  "input_directory": ".",
   "alpha_step": 0.1,
   "threads": 32,
-  "combination_chunk_size": 256,
   "working_directory": "../runs",
   "checkpoint_interval_seconds": 60,
   "github": {

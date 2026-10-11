@@ -4,7 +4,10 @@
 
 #include <memory>
 
+#include <string>
+
 namespace downsizing {
+class Checkpoint;
 
 struct TreeNode {
     std::size_t level;
@@ -21,6 +24,6 @@ struct NestingTree {
 
 // The root has parent == 0; identical sets at different levels share their storage.
 [[nodiscard]] NestingTree build_tree(const Graph& graph, std::size_t minimum_size,
-                                    MaximalKVCCEnumerator::GlobalCut global_cut = {});
+                                    Checkpoint* checkpoint = nullptr, const std::string& graph_id = "");
 
 } // namespace downsizing

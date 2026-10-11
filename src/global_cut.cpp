@@ -14,7 +14,8 @@ struct Certificate {
     std::vector<VertexSet> groups;
 };
 
-Certificate build_certificate(const Graph& graph, const VertexSet& vertices, std::size_t k) {
+Certificate build_certificate(const Graph& graph, const VertexSet& vertices, std::size_t k,
+                              const std::function<void()>& poll = {}) {
     const auto ordered = ordered_subset(graph, vertices);
     if (k == 0 || ordered.size() < 2) {
         throw std::invalid_argument("Sparse certificate requires k >= 1 and at least two vertices");
@@ -22,6 +23,7 @@ Certificate build_certificate(const Graph& graph, const VertexSet& vertices, std
     const std::unordered_set<Vertex> selected(ordered.begin(), ordered.end());
     std::map<Vertex, std::set<Vertex>> remaining;
     for (const auto vertex : ordered) {
+        if (poll) poll();
         auto& neighbors = remaining[vertex];
         for (const auto neighbor : graph.neighbors(vertex)) {
             if (selected.contains(neighbor)) {
@@ -46,6 +48,7 @@ Certificate build_certificate(const Graph& graph, const VertexSet& vertices, std
             std::queue<Vertex> queue;
             queue.push(root);
             while (!queue.empty()) {
+                if (poll) poll();
                 const auto vertex = queue.front();
                 queue.pop();
                 round_groups.back().push_back(vertex);
@@ -102,10 +105,12 @@ Vertex minimum_degree_vertex(const Graph& graph, const VertexSet& ordered) {
 
 std::set<Vertex> strong_side_vertices(const Graph& certificate, const VertexSet& ordered,
                                            std::size_t k, const StrongSideCache& parent,
-                                           GlobalCutStats& stats) {
+                                           GlobalCutStats& stats,
+                                           const std::function<void()>& poll = {}) {
     std::set<Vertex> strong;
     // Theorem 8: each nonadjacent pair of neighbors has >= k common neighbors.
     for (const auto vertex : ordered) {
+        if (poll) poll();
         if (parent && parent->k == k &&
             std::binary_search(parent->vertices.begin(), parent->vertices.end(), vertex) &&
             !parent->recheck.contains(vertex)) {
@@ -117,6 +122,7 @@ std::set<Vertex> strong_side_vertices(const Graph& certificate, const VertexSet&
         bool side = true;
         const auto& neighbors = certificate.neighbors(vertex);
         for (std::size_t i = 0; side && i < neighbors.size(); ++i) {
+            if (poll) poll();
             const auto& left = certificate.neighbors(neighbors[i]);
             for (std::size_t j = i + 1; side && j < neighbors.size(); ++j) {
                 if (std::binary_search(left.begin(), left.end(), neighbors[j])) continue;
@@ -220,12 +226,14 @@ VertexSet global_cut(const Graph& graph, const Certificate& data, VertexFlow& fl
 
 // Algorithm 3: GLOBAL-CUT*.
 VertexSet global_cut_star(const Graph& graph, const Certificate& data, VertexFlow& flow,
-                          std::size_t k, const std::set<Vertex>& strong, GlobalCutStats& stats) {
+                          std::size_t k, const std::set<Vertex>& strong, GlobalCutStats& stats,
+                          const std::function<void()>& poll = {}) {
     const auto& ordered = flow.vertices();
     const auto source = strong.empty() ? minimum_degree_vertex(graph, ordered) : *strong.begin();
     SweepState state(data.groups);
     sweep(source, data, strong, k, state, stats);
     for (const auto vertex : decreasing_distance_order(graph, ordered, source)) {
+        if (poll) poll();
         if (state.verified.contains(vertex)) continue;
         auto cut = local_cut(data.graph, flow, source, vertex, k, stats);
         if (!cut.empty()) return cut;
@@ -236,6 +244,7 @@ VertexSet global_cut_star(const Graph& graph, const Certificate& data, VertexFlo
     const auto& neighbors = data.graph.neighbors(source);
     for (std::size_t i = 0; i < neighbors.size(); ++i) {
         for (std::size_t j = i + 1; j < neighbors.size(); ++j) {
+            if (poll) poll();
             if (state.group_of.at(neighbors[i]) == state.group_of.at(neighbors[j])) {
                 ++stats.group_pair_skips;
                 continue;
@@ -266,15 +275,15 @@ VertexSet find_global_cut_with_options(const Graph& graph, const VertexSet& vert
 }
 
 VertexSet find_global_cut_reusing(const Graph& graph, const VertexSet& vertices, std::size_t k,
-                                 StrongSideCache& cache, GlobalCutStats& stats) {
+                                 StrongSideCache& cache, GlobalCutStats& stats, const std::function<void()>& poll) {
     stats = {};
     if (k == 0 || k >= vertices.size()) {
         throw std::invalid_argument("GLOBAL_CUT requires 1 <= k < the number of vertices");
     }
-    auto data = build_certificate(graph, vertices, k);
+    auto data = build_certificate(graph, vertices, k, poll);
     VertexFlow flow(data.graph, vertices, VertexFlow::EdgeCapacity::Unit);
-    auto strong = strong_side_vertices(data.graph, flow.vertices(), k, cache, stats);
-    auto cut = global_cut_star(graph, data, flow, k, strong, stats);
+    auto strong = strong_side_vertices(data.graph, flow.vertices(), k, cache, stats, poll);
+    auto cut = global_cut_star(graph, data, flow, k, strong, stats, poll);
     // Separator vertices lose neighbors after partitioning and can become strong.
     std::set<Vertex> recheck(cut.begin(), cut.end());
     for (const auto vertex : strong) {
