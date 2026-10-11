@@ -1,15 +1,20 @@
 #pragma once
 
+#include "graph_downsizing/combinations.hpp"
+
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace downsizing {
@@ -19,6 +24,20 @@ struct Interrupted : std::runtime_error {
 };
 
 void install_stop_handlers();
+
+// One writer per range. Only snapshot readers contend for this private mutex.
+class RangeCursor {
+public:
+    explicit RangeCursor(BigInt next) : next_(std::move(next)) {}
+    void advance();
+    [[nodiscard]] BigInt snapshot() const;
+
+private:
+    mutable std::mutex mutex_;
+    BigInt next_;
+};
+
+using RangeCursors = std::map<std::string, std::shared_ptr<RangeCursor>>;
 
 // One tree.json and progress.json per graph. Published state is held in memory;
 // flush replaces changed files atomically, always saving the tree before progress.
@@ -31,7 +50,9 @@ public:
     Checkpoint& operator=(const Checkpoint&) = delete;
 
     [[nodiscard]] nlohmann::json get(const std::string& key) const;
-    void put(const std::string& key, nlohmann::json value, bool immediate = false);
+    // Register live cursors together with their node state; an empty map detaches them.
+    void put(const std::string& key, nlohmann::json value, bool immediate = false,
+             RangeCursors cursors = {});
     void put_many(std::map<std::string, nlohmann::json> values);
     void flush();
     void check() const;
@@ -55,6 +76,7 @@ private:
 
     [[nodiscard]] Location locate(const std::string& key) const;
     void update(const std::string& key, nlohmann::json value);
+    void snapshot_cursors_locked();
     void flush_locked();
     void background(std::chrono::seconds interval);
 
@@ -63,7 +85,9 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     std::map<std::string, GraphState> graphs_;
+    std::map<std::string, RangeCursors> cursors_;
     std::exception_ptr error_;
+    std::atomic<bool> failed_{false};
     bool closing_ = false;
     std::thread saver_;
 };

@@ -21,6 +21,13 @@ def document(path):
         return {}
 
 
+def completed_subsets(state):
+    if state.get("status") != "IN_PROGRESS":
+        return 0
+    return int(state["next_unassigned"]) - sum(
+        int(item["end"]) - int(item["next"]) for item in state["unfinished_ranges"])
+
+
 def wait_for(process, function, seconds=30):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -86,19 +93,19 @@ try:
         # Periodic sampling must work while a node is still being enumerated.
         resource_log = checkpoint / "run.log"
         wait_for(process, lambda: len(resource_log.read_text().split("resources cpu_percent=")) >= 3)
-        first_cursor = saved["next"]
-        assert first_cursor > list(range(n // 2)), first_cursor
+        first_cursor = wait_for(process, lambda: completed_subsets(document(progress).get("nodes", {}).get(key, {})))
+        assert first_cursor > 0, first_cursor
         fails(config, checkpoint, "already in use")
         process.kill()
         process.communicate(timeout=10)
-        assert document(progress)["nodes"][key]["next"] >= first_cursor
+        assert completed_subsets(document(progress)["nodes"][key]) >= first_cursor
 
         # Garbage left by an interrupted write is never read as committed progress.
         pathlib.Path(str(progress) + ".tmp").write_text("{incomplete")
         options["threads"] = 4
         config.write_text(json.dumps(options))
         process = start(config, checkpoint)
-        wait_for(process, lambda: document(progress).get("nodes", {}).get(key, {}).get("next", []) > first_cursor)
+        wait_for(process, lambda: completed_subsets(document(progress).get("nodes", {}).get(key, {})) > first_cursor)
         process.send_signal(signal.SIGTERM)
         finish(process, 130)
         log = resource_log.read_text()
@@ -109,7 +116,7 @@ try:
             values = [float(v) for v in re.findall(rf"\b{field}=([0-9.]+)", log)]
             assert values and all(math.isfinite(v) and v >= 0 for v in values), (field, log)
         assert "active_tasks=1" in log and "queued_tasks=" in log and "finished_tasks=" in log
-        second_cursor = document(progress)["nodes"][key]["next"]
+        second_cursor = completed_subsets(document(progress)["nodes"][key])
         assert second_cursor > first_cursor
         process = start(config, checkpoint)
         time.sleep(0.2)

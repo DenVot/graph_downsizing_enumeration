@@ -61,7 +61,7 @@ nlohmann::json read_json(const std::filesystem::path& path) {
         throw std::runtime_error("Invalid checkpoint JSON: " + path.string());
     }
 
-    if (!document.is_object() || document.value("version", 0) != 4) {
+    if (!document.is_object() || document.value("version", 0) != 5) {
         throw std::runtime_error("Unsupported checkpoint format version: " + path.string());
     }
 
@@ -69,6 +69,16 @@ nlohmann::json read_json(const std::filesystem::path& path) {
 }
 
 } // namespace
+
+void RangeCursor::advance() {
+    std::lock_guard lock(mutex_);
+    ++next_;
+}
+
+BigInt RangeCursor::snapshot() const {
+    std::lock_guard lock(mutex_);
+    return next_;
+}
 
 void install_stop_handlers() {
     signal_number.store(0);
@@ -129,7 +139,7 @@ Checkpoint::Checkpoint(const std::filesystem::path& directory, bool resume, std:
                 any_tree = true;
             } else {
                 state.tree = {
-                    {"version", 4},
+                    {"version", 5},
                     {"graph_id", graph_id},
                     {"metadata", item},
                     {"state", nullptr},
@@ -152,7 +162,7 @@ Checkpoint::Checkpoint(const std::filesystem::path& directory, bool resume, std:
                 }
             } else {
                 state.progress = {
-                    {"version", 4},
+                    {"version", 5},
                     {"graph_id", graph_id},
                     {"metadata", item},
                     {"nodes", nlohmann::json::object()}
@@ -236,16 +246,18 @@ nlohmann::json Checkpoint::get(const std::string& key) const {
 }
 
 void Checkpoint::check() const {
-    std::lock_guard lock(mutex_);
-    if (error_) {
+    // The hot path touches atomics only. Publish the exception before setting failed_.
+    if (failed_.load(std::memory_order_acquire)) {
+        std::lock_guard lock(mutex_);
         std::rethrow_exception(error_);
     }
-    if (signal_number.load() != 0) {
+    if (signal_number.load(std::memory_order_relaxed) != 0) {
         throw Interrupted();
     }
 }
 
 void Checkpoint::update(const std::string& key, nlohmann::json value) {
+    cursors_.erase(key);
     const auto location = locate(key);
     auto& state = graphs_.at(location.graph);
     auto& document = location.tree ? state.tree : state.progress;
@@ -256,18 +268,22 @@ void Checkpoint::update(const std::string& key, nlohmann::json value) {
     (location.tree ? state.tree_dirty : state.progress_dirty) = true;
 }
 
-void Checkpoint::put(const std::string& key, nlohmann::json value, bool immediate) {
+void Checkpoint::put(const std::string& key, nlohmann::json value, bool immediate, RangeCursors cursors) {
     std::lock_guard lock(mutex_);
     if (error_) {
         std::rethrow_exception(error_);
     }
     try {
         update(key, std::move(value));
+        if (!cursors.empty()) {
+            cursors_.emplace(key, std::move(cursors));
+        }
         if (immediate) {
             flush_locked();
         }
     } catch (...) {
         error_ = std::current_exception();
+        failed_.store(true, std::memory_order_release);
         throw;
     }
 }
@@ -283,6 +299,7 @@ void Checkpoint::put_many(std::map<std::string, nlohmann::json> values) {
         }
     } catch (...) {
         error_ = std::current_exception();
+        failed_.store(true, std::memory_order_release);
         throw;
     }
 }
@@ -296,11 +313,29 @@ void Checkpoint::flush() {
         flush_locked();
     } catch (...) {
         error_ = std::current_exception();
+        failed_.store(true, std::memory_order_release);
         throw;
     }
 }
 
+void Checkpoint::snapshot_cursors_locked() {
+    for (const auto& [key, cursors] : cursors_) {
+        const auto location = locate(key);
+        auto& state = graphs_.at(location.graph);
+        auto& node = state.progress.at(location.pointer);
+        for (auto& range : node.at("unfinished_ranges")) {
+            const auto& cursor = cursors.at(range.at("begin").get<std::string>());
+            const auto next = cursor->snapshot().str();
+            if (range.at("next") != next) {
+                range["next"] = next;
+                state.progress_dirty = true;
+            }
+        }
+    }
+}
+
 void Checkpoint::flush_locked() {
+    snapshot_cursors_locked();
     for (auto& [graph_id, state] : graphs_) {
         const auto folder = path_ / graph_id;
         if (state.tree_dirty) {
@@ -327,6 +362,7 @@ void Checkpoint::background(std::chrono::seconds interval) {
             flush_locked();
         } catch (...) {
             error_ = std::current_exception();
+            failed_.store(true, std::memory_order_release);
             return;
         }
     }

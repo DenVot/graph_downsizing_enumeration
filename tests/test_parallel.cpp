@@ -32,6 +32,8 @@ void combinations() {
             check(combination_count(n, r) == expected.size(), "Wrong binomial count");
             auto indices = expected.front();
             for (std::size_t rank = 0; rank < expected.size(); ++rank) {
+                check(combination_at(n, r, rank) == expected[rank], "Unrank differs from independent mask order");
+                check(combination_rank(expected[rank], n) == rank, "Rank differs from independent mask order");
                 check(indices == expected[rank], "Combination iterator skipped or duplicated a subset");
                 check(next_combination(indices, n) == (rank + 1 < expected.size()), "Wrong iterator termination");
             }
@@ -39,6 +41,11 @@ void combinations() {
     }
     const BigInt count("100891344545564193334812497256");
     check(combination_count(100, 50) == count, "Binomial count overflowed beyond 64 bits");
+    const BigInt rank = count / 2 + 123;
+    check(combination_rank(combination_at(100, 50, rank), 100) == rank, "Big rank round trip failed");
+    invalid([] { static_cast<void>(combination_at(5, 3, -1)); });
+    invalid([] { static_cast<void>(combination_at(5, 3, 10)); });
+    invalid([] { static_cast<void>(combination_rank({1, 1, 3}, 5)); });
 
 }
 
@@ -79,6 +86,8 @@ void pool_and_search() {
     check(!parallel_p_downsize(cycle, {node}, 5, 2, pool, &stats), "Proper induced cycle subset cannot be 2-connected");
     check(stats.subsets_checked == combination_count(12, 5) && stats.nodes_started == 1,
           "One large node must be exhausted without missing or repeating subsets");
+    check(stats.ranges_started > pool.size() && stats.max_outstanding_ranges <= 2 * pool.size(),
+          "Large node must replenish a bounded window of range jobs");
     const auto left = std::make_shared<const VertexSet>(VertexSet{0,1,2,3,4,5});
     const auto right = std::make_shared<const VertexSet>(VertexSet{6,7,8,9,10,11});
     check(!parallel_p_downsize(cycle, {left,right}, 3, 2, pool, &stats) && stats.subsets_checked == 40 && stats.nodes_started == 2,
@@ -88,7 +97,8 @@ void pool_and_search() {
     const auto clique = Graph::from_edges(edges);
     const auto answer = parallel_p_downsize(clique, {node}, 6, 5, pool, &stats);
     check(answer && answer->size() == 6 && is_k_connected(clique, *answer, 5), "Invalid parallel witness");
-    check(stats.nodes_started == 1 && stats.subsets_checked == 1, "One node must be one sequential task");
+    check(stats.nodes_started == 1 && stats.subsets_checked >= 1 && stats.subsets_checked <= pool.size(),
+          "Success must cancel other ranges of the same node");
     std::vector<std::shared_ptr<const VertexSet>> many_nodes(100, node);
     check(parallel_p_downsize(clique, many_nodes, 6, 5, pool, &stats).has_value()
           && stats.nodes_started <= pool.size(), "Success must cancel remaining nodes");
@@ -104,6 +114,6 @@ void pool_and_search() {
 }
 } // namespace
 int main() {
-    try { combinations(); pool_and_search(); std::cout << "Combinations, queued workers, sequential nodes, cancellation: passed\n"; }
+    try { combinations(); pool_and_search(); std::cout << "Combinations, queued workers, parallel ranges, cancellation: passed\n"; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

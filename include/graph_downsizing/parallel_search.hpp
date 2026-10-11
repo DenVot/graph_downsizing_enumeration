@@ -18,6 +18,8 @@ struct NodeProgress {
 struct SearchStats {
     std::size_t nodes_started = 0;
     BigInt subsets_checked = 0;
+    std::size_t ranges_started = 0;
+    std::size_t max_outstanding_ranges = 0;
 };
 
 // Enumerate r-subsets in lexicographic order; return the first witness with connectivity >= k.
@@ -26,7 +28,8 @@ struct SearchStats {
                                                 const std::atomic<bool>* stopped = nullptr, BigInt* checked = nullptr,
                                                 NodeProgress* progress = nullptr);
 
-// Each task processes one entire node sequentially. All nodes belong to one level k.
+// Each task processes a bounded range of combinations. All nodes belong to one level k.
+// The coordinator keeps at most 2 * pool.size() accepted, unfinished tasks.
 // References remain alive until every queued/running task has finished.
 // Stops on the first success; the witness can vary with scheduling, the optimum cannot.
 [[nodiscard]] std::optional<VertexSet> parallel_p_downsize(
