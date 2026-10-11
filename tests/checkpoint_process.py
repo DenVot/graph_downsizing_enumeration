@@ -116,6 +116,12 @@ try:
             values = [float(v) for v in re.findall(rf"\b{field}=([0-9.]+)", log)]
             assert values and all(math.isfinite(v) and v >= 0 for v in values), (field, log)
         assert "active_tasks=1" in log and "queued_tasks=" in log and "finished_tasks=" in log
+        search_lines = [line for line in log.splitlines()
+                        if 'resources ' in line and 'graph="cycle" phase=search alpha=0.5 r=12 k=2' in line]
+        assert search_lines, log
+        assert all('level_nodes_done=0 level_nodes_total=1 level_nodes_percent=0.00' in line
+                   and 'overall_nodes_done=0 overall_nodes_total=1 overall_percent=0.00' in line
+                   for line in search_lines), search_lines
         second_cursor = completed_subsets(document(progress)["nodes"][key])
         assert second_cursor > first_cursor
         process = start(config, checkpoint)
@@ -137,6 +143,10 @@ try:
         options["working_directory"] = str(root / "resumed")
         config.write_text(json.dumps(options))
         finish(start(config, portable))
+        solved_lines = [line for line in (portable / "run.log").read_text().splitlines()
+                        if 'event=solution' in line and 'graph="cycle"' in line]
+        assert solved_lines and all('overall_percent=100.00 search_status=SOLVED' in line
+                                    for line in solved_lines), solved_lines
         answer = root / "resumed/cycle/cycle_sol.txt"
         lines = answer.read_text().splitlines()
         assert lines[0] == f"0.5 {n // 2} 1 {n // 2 - 1}", lines[:1]

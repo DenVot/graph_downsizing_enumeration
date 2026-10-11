@@ -215,10 +215,12 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
             }
             do {
                 const bool reused = solver.solutions().contains(task->r);
-                logger.context(graph_id, "search", task->r);
+                logger.search(graph_id, task->alpha, task->r);
                 std::ostringstream result;
                 result << std::setprecision(15) << "event=solution alpha=" << task->alpha << " r=" << task->r;
-                const auto& solution = solver.solve(task->r);
+                const auto& solution = solver.solve(task->r, [&](const downsizing::SolveProgress& progress) {
+                    logger.search_progress(progress);
+                });
                 if (!reused) {
                     downsizing::save_solution_file(destination, graph, config.alpha_step, solver.solutions());
                 }

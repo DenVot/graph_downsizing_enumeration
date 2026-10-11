@@ -83,7 +83,14 @@ void pool_and_search() {
     const auto cycle = Graph::from_edges(edges);
     const auto node = std::make_shared<const VertexSet>(vertices);
     SearchStats stats;
-    check(!parallel_p_downsize(cycle, {node}, 5, 2, pool, &stats), "Proper induced cycle subset cannot be 2-connected");
+    std::vector<std::pair<std::size_t, std::size_t>> reports;
+    check(!parallel_p_downsize(cycle, {node}, 5, 2, pool, &stats, nullptr, {},
+        [&](std::size_t k, std::size_t done, std::size_t total) {
+            check(k == 2, "Progress must identify the current level");
+            reports.emplace_back(done, total);
+        }), "Proper induced cycle subset cannot be 2-connected");
+    check(reports == std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}, {1, 1}},
+          "Progress counts completed nodes, not individual ranges");
     check(stats.subsets_checked == combination_count(12, 5) && stats.nodes_started == 1,
           "One large node must be exhausted without missing or repeating subsets");
     check(stats.ranges_started > pool.size() && stats.max_outstanding_ranges <= 2 * pool.size(),

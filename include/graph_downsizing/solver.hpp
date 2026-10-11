@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graph_downsizing/solution.hpp"
+#include "graph_downsizing/parallel_search.hpp"
 #include "graph_downsizing/tree.hpp"
 #include "graph_downsizing/worker_pool.hpp"
 
@@ -8,12 +9,22 @@
 
 namespace downsizing {
 
+struct SolveProgress {
+    std::size_t k = 0;
+    std::size_t level_done = 0;
+    std::size_t level_total = 0;
+    std::size_t overall_done = 0;
+    std::size_t overall_total = 0;
+    bool solved = false;
+};
+using SolveProgressCallback = std::function<void(const SolveProgress&)>;
+
 // Graph and pool must outlive the solver. Builds its hierarchy once, then caches results by r.
 class ExactSolver {
 public:
     ExactSolver(const Graph& graph, std::size_t minimum_size, WorkerPool& pool,
                 Checkpoint* checkpoint = nullptr, const std::string& graph_id = "");
-    [[nodiscard]] const Solution& solve(std::size_t r);
+    [[nodiscard]] const Solution& solve(std::size_t r, SolveProgressCallback progress = {});
     [[nodiscard]] const SolutionsBySize& solutions() const noexcept { return solutions_; }
     [[nodiscard]] const NestingTree& tree() const noexcept { return tree_; }
 

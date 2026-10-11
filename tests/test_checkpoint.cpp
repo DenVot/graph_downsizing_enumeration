@@ -68,7 +68,12 @@ int main() {
             WorkerPool pool(4);
             auto node = std::make_shared<const VertexSet>(vertices);
             SearchStats stats;
-            check(!parallel_p_downsize(cycle, {node}, 3, 2, pool, &stats, &state, "search/test/3/2") && stats.nodes_started == 0,
+            std::size_t reported_done = 0;
+            check(!parallel_p_downsize(cycle, {node}, 3, 2, pool, &stats, &state, "search/test/3/2",
+                [&](std::size_t k, std::size_t done, std::size_t total) {
+                    check(k == 2 && total == 1, "Restored progress level mismatch");
+                    reported_done = done;
+                }) && stats.nodes_started == 0 && reported_done == 1,
                   "Finished node was executed again");
             state.flush();
             check(read(portable / "test/progress.json").at("nodes").at("3/2/30").at("status") == "FINISHED_NOT_FOUND", "Final status not saved");

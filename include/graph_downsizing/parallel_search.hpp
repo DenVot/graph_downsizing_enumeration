@@ -5,12 +5,15 @@
 #include "graph_downsizing/worker_pool.hpp"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 
 namespace downsizing {
 class Checkpoint;
+// Called at level start and node completion, never for individual combinations.
+using SearchProgressCallback = std::function<void(std::size_t k, std::size_t completed, std::size_t total)>;
 struct NodeProgress {
     Checkpoint& checkpoint;
     std::string key;
@@ -36,5 +39,5 @@ struct SearchStats {
     const Graph& graph, const std::vector<std::shared_ptr<const VertexSet>>& nodes,
     std::size_t r, std::size_t k, WorkerPool& pool,
     SearchStats* stats = nullptr, Checkpoint* checkpoint = nullptr,
-    const std::string& prefix = {});
+    const std::string& prefix = {}, SearchProgressCallback progress = {});
 } // namespace downsizing

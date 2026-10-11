@@ -96,6 +96,48 @@ RunLogger::~RunLogger() {
     }
 }
 
+void RunLogger::search(const std::string& graph, double alpha, std::size_t r) {
+    std::ostringstream text;
+    text << "graph=" << std::quoted(graph) << " phase=search alpha=" << std::setprecision(15) << alpha << " r=" << r;
+    std::lock_guard lock(mutex_);
+    context_ = text.str();
+    progress_ = {};
+    searching_ = true;
+    write("INFO", "event=search_started");
+}
+
+void RunLogger::search_progress(const SolveProgress& progress) {
+    std::lock_guard lock(mutex_);
+    progress_ = progress;
+}
+
+std::string RunLogger::progress_fields() const {
+    std::ostringstream text;
+    text << std::fixed << std::setprecision(2) << context_;
+    if (!searching_) {
+        text << " level_nodes_percent=n/a overall_percent=n/a";
+        return text.str();
+    }
+    text << " k=" << progress_.k << " level_nodes_done=" << progress_.level_done
+         << " level_nodes_total=" << progress_.level_total << " level_nodes_percent=";
+    if (progress_.level_total != 0) {
+        text << 100.0L * static_cast<long double>(progress_.level_done) / static_cast<long double>(progress_.level_total);
+    } else {
+        text << "n/a";
+    }
+    text << " overall_nodes_done=" << progress_.overall_done << " overall_nodes_total=" << progress_.overall_total
+         << " overall_percent=";
+    if (progress_.solved) {
+        text << "100.00";
+    } else if (progress_.overall_total != 0) {
+        text << 100.0L * static_cast<long double>(progress_.overall_done) / static_cast<long double>(progress_.overall_total);
+    } else {
+        text << "n/a";
+    }
+    text << " search_status=" << (progress_.solved ? "SOLVED" : "IN_PROGRESS");
+    return text.str();
+}
+
 void RunLogger::write(const char* level, const std::string& message) {
     const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm utc{};
@@ -103,7 +145,7 @@ void RunLogger::write(const char* level, const std::string& message) {
     const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
     std::ostringstream line;
     line << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ") << " " << level << " pid=" << ::getpid()
-         << " elapsed_s=" << std::fixed << std::setprecision(2) << elapsed << " " << message;
+         << " elapsed_s=" << std::fixed << std::setprecision(2) << elapsed << " " << message << " " << progress_fields();
     // One physical line per event, including filenames containing newlines.
     auto rendered = line.str();
     for (auto& character : rendered) {
@@ -137,7 +179,8 @@ void RunLogger::context(const std::string& graph, const std::string& phase, std:
     }
     std::lock_guard lock(mutex_);
     context_ = text.str();
-    write("INFO", context_);
+    searching_ = false;
+    write("INFO", "event=phase_changed");
 }
 
 void RunLogger::sample() {
@@ -165,7 +208,7 @@ void RunLogger::sample() {
          << " workers=" << pool_.size() << " active_tasks=" << pool.active
          << " queued_tasks=" << pool.queued << " finished_tasks=" << pool.finished;
     std::lock_guard lock(mutex_);
-    write("INFO", text.str() + " " + context_);
+    write("INFO", text.str());
 }
 
 void RunLogger::monitor(std::chrono::seconds interval) {

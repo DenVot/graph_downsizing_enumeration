@@ -836,6 +836,28 @@ void test_solver() {
     test_known_solver_answers();
     WorkerPool single_pool(1);
     WorkerPool pool(4);
+    const auto bipartite = Graph::from_edges({{0,3},{0,4},{0,5},{1,3},{1,4},{1,5},{2,3},{2,4},{2,5}});
+    ExactSolver progress_solver(bipartite, 1, pool);
+    std::vector<SolveProgress> reports;
+    const auto observe = [&](const SolveProgress& status) { reports.push_back(status); };
+    check(progress_solver.solve(4, observe).connectivity == 2, "K3,3 on four vertices has optimum 2");
+    check(reports.front().overall_total == 2 && reports.back().solved && reports.back().overall_done == 2,
+          "Overall progress must cover eligible nodes across levels for current r");
+    check(std::any_of(reports.begin(), reports.end(), [](const SolveProgress& status) {
+        return status.k == 3 && status.level_done == 1 && status.level_total == 1 && status.overall_done == 1;
+    }), "Completed unsuccessful level must contribute to overall progress");
+    reports.clear();
+    static_cast<void>(progress_solver.solve(4, observe));
+    check(reports.size() == 1 && reports.back().solved, "Cached r must report solved");
+    reports.clear();
+    static_cast<void>(progress_solver.solve(1, observe));
+    check(reports.back().solved && reports.back().overall_total == 0, "Singleton requires no node search");
+    const auto complete = Graph::from_edges({{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}});
+    ExactSolver early_solver(complete, 1, pool);
+    reports.clear();
+    static_cast<void>(early_solver.solve(4, observe));
+    check(reports.back().solved && reports.back().overall_done == 1 && reports.back().overall_total == 2,
+          "Early success must not count unvisited nodes as processed");
     all_small_graphs([&](const Oracle& oracle) { verify_solver(oracle, single_pool, pool); });
     random_graphs([&](const Oracle& oracle) { verify_solver(oracle, single_pool, pool); });
     const auto graph = Graph::from_edges({{10,20},{20,30},{30,40},{40,50},{50,60},{60,10},

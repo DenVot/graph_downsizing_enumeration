@@ -85,9 +85,10 @@ public:
     RangeSearch(const Graph& graph, const std::vector<std::shared_ptr<const VertexSet>>& nodes,
                 std::size_t r, std::size_t k, WorkerPool* pool, SearchStats* stats,
                 Checkpoint* checkpoint, const std::string& prefix,
-                const std::atomic<bool>* external_stop = nullptr, bool exact_key = false)
+                const std::atomic<bool>* external_stop = nullptr, bool exact_key = false,
+                SearchProgressCallback progress = {})
         : graph_(graph), r_(r), k_(k), pool_(pool), stats_(stats), checkpoint_(checkpoint),
-          external_stop_(external_stop), window_(pool ? 2 * pool->size() : 1) {
+          external_stop_(external_stop), window_(pool ? 2 * pool->size() : 1), progress_(std::move(progress)) {
         for (std::size_t i = 0; i < nodes.size(); ++i) {
             if (!nodes[i] || ordered_subset(graph, *nodes[i]) != *nodes[i]) {
                 throw std::invalid_argument("Parallel nodes must contain sorted unique vertex IDs");
@@ -106,8 +107,12 @@ public:
             if (node.status == "FINISHED_FOUND") {
                 result_ = node.witness;
             }
+            if (node.status == "FINISHED_FOUND" || node.status == "FINISHED_NOT_FOUND") {
+                ++finished_nodes_;
+            }
             nodes_.push_back(std::move(node));
         }
+        report_progress();
     }
 
     std::optional<VertexSet> run() {
@@ -177,6 +182,12 @@ public:
     }
 
 private:
+    void report_progress() const {
+        if (progress_) {
+            progress_(k_, finished_nodes_, nodes_.size());
+        }
+    }
+
     bool cancelled() const {
         return stopped_.load() || (external_stop_ && external_stop_->load());
     }
@@ -245,6 +256,8 @@ private:
             if (node.ranges.empty() && node.status != "FINISHED_NOT_FOUND") {
                 node.status = "FINISHED_NOT_FOUND";
                 publish(node);
+                ++finished_nodes_;
+                report_progress();
             }
         }
         return std::nullopt;
@@ -308,6 +321,8 @@ private:
                     publish(node, true);
                     result_ = std::move(subset);
                     stopped_.store(true);
+                    ++finished_nodes_;
+                    report_progress();
                 }
                 return;
             }
@@ -326,6 +341,10 @@ private:
                     node.status = "FINISHED_NOT_FOUND";
                 }
                 publish(node);
+                if (node.status == "FINISHED_NOT_FOUND") {
+                    ++finished_nodes_;
+                    report_progress();
+                }
             }
         }
     }
@@ -360,6 +379,8 @@ private:
     Checkpoint* checkpoint_;
     const std::atomic<bool>* external_stop_;
     std::size_t window_;
+    SearchProgressCallback progress_;
+    std::size_t finished_nodes_ = 0;
     std::vector<Node> nodes_;
     std::size_t next_node_ = 0;
     std::size_t outstanding_ = 0;
@@ -399,7 +420,7 @@ std::optional<VertexSet> p_downsize(const Graph& graph, const VertexSet& vertice
 std::optional<VertexSet> parallel_p_downsize(
     const Graph& graph, const std::vector<std::shared_ptr<const VertexSet>>& nodes,
     std::size_t r, std::size_t k, WorkerPool& pool, SearchStats* stats,
-    Checkpoint* checkpoint, const std::string& prefix) {
+    Checkpoint* checkpoint, const std::string& prefix, SearchProgressCallback progress) {
     if (r == 0) {
         throw std::invalid_argument("Search requires positive r");
     }
@@ -409,7 +430,7 @@ std::optional<VertexSet> parallel_p_downsize(
     if (k >= r) {
         return std::nullopt;
     }
-    return RangeSearch(graph, nodes, r, k, &pool, stats, checkpoint, prefix).run();
+    return RangeSearch(graph, nodes, r, k, &pool, stats, checkpoint, prefix, nullptr, false, std::move(progress)).run();
 }
 
 } // namespace downsizing

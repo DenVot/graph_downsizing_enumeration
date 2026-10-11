@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graph_downsizing/worker_pool.hpp"
+#include "graph_downsizing/solver.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -20,11 +21,14 @@ public:
     RunLogger(const RunLogger&) = delete;
     RunLogger& operator=(const RunLogger&) = delete;
 
+    void search_progress(const SolveProgress& progress);
+    void search(const std::string& graph, double alpha, std::size_t r);
     void info(const std::string& message);
     void error(const std::string& message);
     void context(const std::string& graph, const std::string& phase, std::size_t r = 0);
 
 private:
+    [[nodiscard]] std::string progress_fields() const;
     void write(const char* level, const std::string& message);
     void sample();
     void monitor(std::chrono::seconds interval);
@@ -36,6 +40,8 @@ private:
     std::condition_variable wake_;
     bool stopping_ = false;
     std::string context_ = "phase=startup";
+    SolveProgress progress_;
+    bool searching_ = false;
     std::thread monitor_;
     const std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point previous_time_;
