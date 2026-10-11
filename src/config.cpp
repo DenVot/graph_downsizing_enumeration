@@ -148,7 +148,7 @@ Config read_config(const std::filesystem::path& path) {
         throw std::runtime_error("Failed to read configuration file");
     }
     check_keys(document, {"inputs", "input_directory", "alpha_step", "threads", "working_directory",
-                          "checkpoint_interval_seconds", "github"}, "configuration");
+                          "checkpoint_interval_seconds", "log_interval_seconds", "github"}, "configuration");
 
     Config config{};
     const auto base = std::filesystem::absolute(path).parent_path().lexically_normal();
@@ -165,6 +165,9 @@ Config read_config(const std::filesystem::path& path) {
     constexpr auto max_seconds = static_cast<std::uint64_t>(std::chrono::seconds::max().count());
     config.checkpoint_interval = std::chrono::seconds(static_cast<std::chrono::seconds::rep>(
         positive_field(document, "checkpoint_interval_seconds", 60, max_seconds)));
+
+    config.log_interval = std::chrono::seconds(static_cast<std::chrono::seconds::rep>(
+        positive_field(document, "log_interval_seconds", 10, max_seconds)));
 
     if (document.contains("inputs") == document.contains("input_directory")) {
         throw std::invalid_argument("Specify exactly one of inputs and input_directory");

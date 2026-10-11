@@ -123,6 +123,7 @@ void test_config() {
     TemporaryDirectory directory;
     auto file = directory.write("config.json", R"({"inputs":["data/g.txt"]})");
     const auto config = downsizing::read_config(file);
+    check(config.log_interval.count() == 10, "Default log interval failed");
     check(config.alpha_step == 0.1 && config.threads >= 1, "Default step or threads failed");
     check(config.checkpoint_interval.count() == 60 && config.github.upload_interval.count() == 300, "Default intervals failed");
     check(config.inputs[0] == directory.path() / "data/g.txt", "Input paths must be relative to the config file");
@@ -133,11 +134,12 @@ void test_config() {
     file = directory.write("configured.json", R"({
         "inputs": ["data/g.txt", "other/h.txt"], "alpha_step": 0.3,
         "threads": 32, "working_directory": "work/../answers",
-        "checkpoint_interval_seconds": 7,
+        "checkpoint_interval_seconds": 7, "log_interval_seconds": 2,
         "github": {"enabled":true, "repository_url":"https://github.com/DenVot/graph_downsizing_enumeration.git",
                    "branch":"runs/test", "token_env":"CUSTOM_TOKEN", "upload_interval_seconds":19}
     })");
     const auto configured = downsizing::read_config(file);
+    check(configured.log_interval.count() == 2, "Configured log interval failed");
     check(configured.alpha_step == 0.3 && configured.threads == 32, "Configured values failed");
     check(configured.working_directory == directory.path() / "answers", "Path normalization failed");
     check(configured.github.enabled && configured.github.token.empty() && configured.github.token_env == "CUSTOM_TOKEN",
@@ -174,6 +176,7 @@ void test_config() {
         {R"({"inputs":["a.txt"],"alpha_step":0})", "alpha_step"},
         {R"({"inputs":["a.txt"],"alpha_step":true})", "alpha_step"},
         {R"({"inputs":["a.txt"],"combination_chunk_size":256})", "Unknown field"},
+        {R"({"inputs":["a.txt"],"log_interval_seconds":0})", "log_interval_seconds"},
         {R"({"inputs":["a.txt"],"threads":0})", "threads"},
         {R"({"inputs":["a.txt"],"threads":-1})", "threads"},
         {R"({"inputs":["a.txt"],"threads":1.5})", "threads"},

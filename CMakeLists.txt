@@ -14,6 +14,7 @@ if(GRAPH_DOWNSIZING_SANITIZERS AND GRAPH_DOWNSIZING_THREAD_SANITIZER)
 endif()
 
 add_library(graph_downsizing_core
+    src/logging.cpp
     src/checkpoint.cpp
     src/combinations.cpp
     src/parallel_search.cpp

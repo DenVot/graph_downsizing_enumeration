@@ -1,6 +1,8 @@
 """Real-process recovery with fixed cycle/clique answers and two JSON files per graph."""
 import json
 import pathlib
+import math
+import re
 import shutil
 import signal
 import subprocess
@@ -26,22 +28,31 @@ def wait_for(process, function, seconds=30):
         if result:
             return result
         if process.poll() is not None:
-            raise AssertionError(f"Process ended too early: {process.returncode}: {process.communicate()[1]}")
+            raise AssertionError(f"Process ended too early: {process.returncode}: {captured_error(process)}")
         time.sleep(0.02)
     raise AssertionError("Timed out waiting for a durable checkpoint boundary")
+
+
+def captured_error(process):
+    process.communicate()
+    process.log_output.seek(0)
+    return process.log_output.read()
 
 
 def start(config, checkpoint=None):
     command = [exe, "resume" if checkpoint else "run", "--config", str(config)]
     if checkpoint:
         command += ["--checkpoint", str(checkpoint)]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    log_output = tempfile.TemporaryFile(mode="w+t")
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log_output, text=True)
+    process.log_output = log_output
     children.append(process)
     return process
 
 
 def finish(process, code=0, timeout=120):
-    _, error = process.communicate(timeout=timeout)
+    process.communicate(timeout=timeout)
+    error = captured_error(process)
     assert process.returncode == code, (process.returncode, error)
     return error
 
@@ -63,7 +74,7 @@ try:
         triangle.write_text("100 200\n200 300\n100 300\n")
         config = root / "config.json"
         options = dict(input_directory=str(inputs), alpha_step=0.5, threads=1,
-                       checkpoint_interval_seconds=1, working_directory=str(root / "run"),
+                       checkpoint_interval_seconds=1, log_interval_seconds=1, working_directory=str(root / "run"),
                        github=dict(enabled=False, token="SECRET_MUST_NOT_BE_SAVED"))
         config.write_text(json.dumps(options))
         checkpoint = root / "run"
@@ -72,6 +83,9 @@ try:
         process = start(config)
         saved = wait_for(process, lambda: document(progress).get("nodes", {}).get(key))
         assert saved["status"] == "IN_PROGRESS", saved
+        # Periodic sampling must work while a node is still being enumerated.
+        resource_log = checkpoint / "run.log"
+        wait_for(process, lambda: len(resource_log.read_text().split("resources cpu_percent=")) >= 3)
         first_cursor = saved["next"]
         assert first_cursor > list(range(n // 2)), first_cursor
         fails(config, checkpoint, "already in use")
@@ -87,6 +101,14 @@ try:
         wait_for(process, lambda: document(progress).get("nodes", {}).get(key, {}).get("next", []) > first_cursor)
         process.send_signal(signal.SIGTERM)
         finish(process, 130)
+        log = resource_log.read_text()
+        assert "mode=run" in log and "mode=resume" in log
+        assert "event=run_interrupted checkpoint_saved=true" in log
+        assert "SECRET_MUST_NOT_BE_SAVED" not in log
+        for field in ("cpu_percent", "rss_mib", "peak_rss_mib", "disk_available_gib"):
+            values = [float(v) for v in re.findall(rf"\b{field}=([0-9.]+)", log)]
+            assert values and all(math.isfinite(v) and v >= 0 for v in values), (field, log)
+        assert "active_tasks=1" in log and "queued_tasks=" in log and "finished_tasks=" in log
         second_cursor = document(progress)["nodes"][key]["next"]
         assert second_cursor > first_cursor
         process = start(config, checkpoint)
@@ -169,3 +191,4 @@ finally:
         if process.poll() is None:
             process.kill()
         process.communicate()
+        process.log_output.close()

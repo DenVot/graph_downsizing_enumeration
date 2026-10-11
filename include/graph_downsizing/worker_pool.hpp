@@ -13,6 +13,13 @@ namespace downsizing {
 // The task queue has no size limit.
 class WorkerPool {
 public:
+    struct Stats {
+        std::size_t active;
+        std::size_t queued;
+        std::size_t finished;
+    };
+
+    [[nodiscard]] Stats stats();
     explicit WorkerPool(std::size_t threads);
     ~WorkerPool();
     WorkerPool(const WorkerPool&) = delete;
@@ -29,6 +36,7 @@ private:
     std::condition_variable finished_;
     bool stopping_ = false;
     std::size_t active_ = 0;
+    std::size_t finished_tasks_ = 0;
     std::deque<std::function<void()>> jobs_;
     std::exception_ptr error_;
     std::vector<std::thread> workers_;

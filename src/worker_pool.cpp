@@ -40,6 +40,7 @@ void WorkerPool::worker() {
         lock.lock();
         if (error && !error_) error_ = error;
         --active_;
+        ++finished_tasks_;
         if (jobs_.empty() && active_ == 0) finished_.notify_one();
     }
 }
@@ -50,6 +51,11 @@ void WorkerPool::submit(std::function<void()> job) {
     if (stopping_) throw std::logic_error("Cannot submit to a stopped pool");
     jobs_.push_back(std::move(job));
     ready_.notify_one();
+}
+
+WorkerPool::Stats WorkerPool::stats() {
+    std::lock_guard lock(mutex_);
+    return {active_, jobs_.size(), finished_tasks_};
 }
 
 void WorkerPool::wait() {

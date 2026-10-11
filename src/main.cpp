@@ -1,5 +1,6 @@
 #include "graph_downsizing/alpha.hpp"
 #include "graph_downsizing/checkpoint.hpp"
+#include "graph_downsizing/logging.hpp"
 #include "graph_downsizing/config.hpp"
 #include "graph_downsizing/graph.hpp"
 #include "graph_downsizing/tree.hpp"
@@ -12,6 +13,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <string_view>
 
 namespace {
@@ -134,7 +136,7 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
          const std::filesystem::path& config_path) {
     const bool restoring = !resume.empty();
     const auto checkpoint_path = restoring ? resume : config.working_directory;
-    std::vector<std::filesystem::path> reserved{checkpoint_path / ".checkpoint.lock"};
+    std::vector<std::filesystem::path> reserved{checkpoint_path / ".checkpoint.lock", checkpoint_path / "run.log"};
     for (std::size_t i = 0; i < config.inputs.size(); ++i) {
         const auto folder = checkpoint_path / config.inputs[i].stem();
         for (const auto name : {"tree.json", "tree.json.tmp", "progress.json", "progress.json.tmp"}) {
@@ -184,18 +186,26 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
         });
     }
     downsizing::Checkpoint checkpoint(checkpoint_path, restoring, config.checkpoint_interval, metadata);
-    std::cout << "checkpoint=" << checkpoint.path().string() << std::endl;
+    downsizing::WorkerPool pool(config.threads);
+    downsizing::RunLogger logger(checkpoint.path() / "run.log", pool, config.log_interval);
     try {
-        downsizing::WorkerPool pool(config.threads);
-        std::cout << "Parallel solver: workers=" << pool.size()
-                  << "; JSON checkpoint enabled.\n";
+        logger.info(std::string("event=run_started mode=") + (restoring ? "resume" : "run") +
+                    " checkpoint=" + checkpoint.path().string() + " workers=" + std::to_string(pool.size()) +
+                    " log_interval_s=" + std::to_string(config.log_interval.count()) +
+                    " checkpoint_interval_s=" + std::to_string(config.checkpoint_interval.count()));
         for (std::size_t i = 0; i < config.inputs.size(); ++i) {
+            const auto graph_id = config.inputs[i].stem().string();
+            logger.context(graph_id, "read_graph");
             const auto graph = downsizing::read_graph(config.inputs[i]);
+            logger.info("event=graph_loaded vertices=" + std::to_string(graph.vertex_count()) +
+                        " edges=" + std::to_string(graph.edge_count()));
             downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
             auto task = schedule.next();
-            std::cout << "Building tree: graph=" << config.inputs[i].string() << " minimum_r=" << task->r << std::endl;
-            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, config.inputs[i].stem().string());
-            std::cout << "nodes=" << solver.tree().nodes.size() << " maximum_k=" << solver.tree().levels.size() - 1 << std::endl;
+            logger.context(graph_id, "build_tree");
+            logger.info("event=tree_started minimum_r=" + std::to_string(task->r));
+            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, graph_id);
+            logger.info("event=tree_ready nodes=" + std::to_string(solver.tree().nodes.size()) +
+                        " maximum_k=" + std::to_string(solver.tree().levels.size() - 1));
             const auto destination = downsizing::solution_path(config, i);
             if (restoring) {
                 // A killed process may have left an unfinished atomic output replacement.
@@ -205,27 +215,37 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
             }
             do {
                 const bool reused = solver.solutions().contains(task->r);
-                std::cout << std::setprecision(15) << "alpha=" << task->alpha << " r=" << task->r << std::flush;
+                logger.context(graph_id, "search", task->r);
+                std::ostringstream result;
+                result << std::setprecision(15) << "event=solution alpha=" << task->alpha << " r=" << task->r;
                 const auto& solution = solver.solve(task->r);
                 if (!reused) {
                     downsizing::save_solution_file(destination, graph, config.alpha_step, solver.solutions());
                 }
-                std::cout << " k=" << solution.connectivity << (reused ? " reused" : " computed");
+                result << " k=" << solution.connectivity << (reused ? " reused" : " computed");
                 if (task->r == 1) {
-                    std::cout << " vertex=" << solution.vertices.front();
+                    result << " vertex=" << solution.vertices.front();
                 }
-                std::cout << std::endl;
+                logger.info(result.str());
             } while ((task = schedule.next()));
-            std::cout << "output=" << destination.string() << " unique_sizes=" << solver.solutions().size() << std::endl;
+            logger.info("event=graph_finished output=" + destination.string() +
+                        " unique_sizes=" + std::to_string(solver.solutions().size()));
         }
+        logger.context("", "save_checkpoint");
         checkpoint.flush();
+        logger.info("event=run_finished checkpoint_saved=true");
     } catch (const downsizing::Interrupted&) {
         checkpoint.flush();
+        logger.info("event=run_interrupted checkpoint_saved=true");
         throw;
-    } catch (...) {
-        const auto error = std::current_exception();
-        checkpoint.flush(); // A disk error here is fatal and takes precedence.
-        std::rethrow_exception(error);
+    } catch (const std::exception& error) {
+        try {
+            logger.error(error.what());
+        } catch (...) {
+            // Logging failure must not prevent saving computation state.
+        }
+        checkpoint.flush();
+        throw;
     }
 }
 

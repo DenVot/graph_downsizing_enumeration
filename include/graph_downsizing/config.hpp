@@ -25,6 +25,7 @@ struct Config {
     std::size_t threads = 1;
     std::filesystem::path working_directory;
     std::chrono::seconds checkpoint_interval{60};
+    std::chrono::seconds log_interval{10};
     GitHubConfig github;
 };
 
