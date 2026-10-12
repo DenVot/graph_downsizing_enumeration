@@ -1,6 +1,7 @@
 #include "graph_downsizing/connectivity.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <stdexcept>
 
@@ -40,12 +41,19 @@ VertexFlow::VertexFlow(const Graph& graph, VertexSet vertices, EdgeCapacity edge
     next_edge_.resize(network_.size());
     queue_.reserve(network_.size());
     path_.reserve(network_.size());
+    if (vertices_.size() <= 64) {
+        neighbor_masks_.resize(vertices_.size());
+    }
     const auto capacity = edge_capacity == EdgeCapacity::Unit ? std::size_t{1} : vertices_.size();
     for (std::size_t i = 0; i < vertices_.size(); ++i) {
         add_arc(2 * i, 2 * i + 1, 1);
         for (const Vertex neighbor : graph.neighbors(vertices_[i])) {
             const auto found = indices_.find(neighbor);
             if (found != indices_.end() && i < found->second) {
+                if (!neighbor_masks_.empty()) {
+                    neighbor_masks_[i] |= std::uint64_t{1} << found->second;
+                    neighbor_masks_[found->second] |= std::uint64_t{1} << i;
+                }
                 add_arc(2 * i + 1, 2 * found->second, capacity);
                 add_arc(2 * found->second + 1, 2 * i, capacity);
             }
@@ -67,6 +75,42 @@ void VertexFlow::select_indices(std::span<const std::size_t> indices) {
     for (const auto vertex : selected_) {
         active_[vertex] = 1;
     }
+}
+
+bool VertexFlow::has_minimum_degree(std::size_t k) const {
+    if (k == 0) {
+        return true;
+    }
+    if (selected_.size() <= k) {
+        return false;
+    }
+    if (!neighbor_masks_.empty()) {
+        std::uint64_t mask = 0;
+        for (const auto vertex : selected_) {
+            mask |= std::uint64_t{1} << vertex;
+        }
+        for (const auto vertex : selected_) {
+            if (static_cast<std::size_t>(std::popcount(neighbor_masks_[vertex] & mask)) < k) {
+                return false;
+            }
+        }
+    } else {
+        for (const auto vertex : selected_) {
+            std::size_t degree = 0;
+            for (const auto& edge : network_[2 * vertex + 1]) {
+                // Only original outgoing arcs, not residual reverse arcs.
+                if (edge.initial_capacity > 0 && active_[edge.to / 2]) {
+                    if (++degree >= k) {
+                        break;
+                    }
+                }
+            }
+            if (degree < k) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void VertexFlow::reset_capacities() {

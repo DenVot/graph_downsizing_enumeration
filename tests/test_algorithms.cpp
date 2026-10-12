@@ -295,6 +295,31 @@ void test_flow() {
         check(reset_flow.between(1,0,4).paths == 3, "Reactivated arcs have original capacities");
     }
 
+    // Check both mask and adjacency implementations, including bit 63 and arbitrary labels.
+    for (const std::size_t n : {4U, 64U, 65U}) {
+        VertexSet labels;
+        std::vector<std::pair<Vertex, Vertex>> edges;
+        for (std::size_t i = 0; i < n; ++i) {
+            labels.push_back(static_cast<Vertex>(i * 10) - 100);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            edges.emplace_back(labels[i], labels[(i + 1) % n]);
+        }
+        const auto ring = Graph::from_edges(edges);
+        for (const auto capacity : {VertexFlow::EdgeCapacity::Unit, VertexFlow::EdgeCapacity::VertexBound}) {
+            VertexFlow degrees(ring, labels, capacity);
+            check(degrees.has_minimum_degree(2) && !degrees.has_minimum_degree(3), "Cycle degree is two");
+            static_cast<void>(degrees.between(labels[0], labels[1], 2));
+            check(degrees.has_minimum_degree(2), "Degree ignores residual capacities");
+            degrees.select_indices(std::vector<std::size_t>{0, n - 1});
+            check(degrees.has_minimum_degree(1) && !degrees.has_minimum_degree(2), "Only selected neighbors count");
+            degrees.select_indices(std::vector<std::size_t>{0, 2});
+            check(!degrees.has_minimum_degree(1), "Outside neighbors cannot satisfy degree bound");
+            degrees.select_indices(std::vector<std::size_t>{0});
+            check(degrees.has_minimum_degree(0) && !degrees.has_minimum_degree(1), "Singleton degree is zero");
+        }
+    }
+
     std::vector<std::pair<Vertex, Vertex>> path;
     VertexSet vertices;
     for (Vertex i = 0; i < 20000; ++i) {

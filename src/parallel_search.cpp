@@ -297,7 +297,7 @@ private:
                 subset[i] = vertices[indices[i]];
             }
             flow.select_indices(indices);
-            bool found = true;
+            bool found = flow.has_minimum_degree(k_);
             for (std::size_t i = 0; i < r_ && found; ++i) {
                 for (std::size_t j = i + 1; j < r_; ++j) {
                     if (checkpoint_) {
