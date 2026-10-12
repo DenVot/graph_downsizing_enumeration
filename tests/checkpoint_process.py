@@ -75,7 +75,7 @@ try:
         inputs = root / "graphs"
         inputs.mkdir()
         graph = inputs / "cycle.txt"
-        n = 24
+        n = 30  # Keep enumeration alive through periodic saves with reused flow networks.
         graph.write_text("".join(f"{i} {(i + 1) % n}\n" for i in range(n)))
         triangle = inputs / "a_triangle.txt"
         triangle.write_text("100 200\n200 300\n100 300\n")
@@ -117,7 +117,7 @@ try:
             assert values and all(math.isfinite(v) and v >= 0 for v in values), (field, log)
         assert "active_tasks=1" in log and "queued_tasks=" in log and "finished_tasks=" in log
         search_lines = [line for line in log.splitlines()
-                        if 'resources ' in line and 'graph="cycle" phase=search alpha=0.5 r=12 k=2' in line]
+                        if 'resources ' in line and f'graph="cycle" phase=search alpha=0.5 r={n // 2} k=2' in line]
         assert search_lines, log
         assert all('level_nodes_done=0 level_nodes_total=1 level_nodes_percent=0.00' in line
                    and 'overall_nodes_done=0 overall_nodes_total=1 overall_percent=0.00' in line

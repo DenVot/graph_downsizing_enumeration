@@ -30,6 +30,11 @@ VertexFlow::VertexFlow(const Graph& graph, VertexSet vertices, EdgeCapacity edge
     for (std::size_t i = 0; i < vertices_.size(); ++i) {
         indices_.emplace(vertices_[i], i);
     }
+    selected_.reserve(vertices_.size());
+    active_.assign(vertices_.size(), 1);
+    for (std::size_t i = 0; i < vertices_.size(); ++i) {
+        selected_.push_back(i);
+    }
     network_.resize(2 * vertices_.size());
     level_.resize(network_.size());
     next_edge_.resize(network_.size());
@@ -48,6 +53,21 @@ VertexFlow::VertexFlow(const Graph& graph, VertexSet vertices, EdgeCapacity edge
     }
 }
 
+void VertexFlow::select_indices(std::span<const std::size_t> indices) {
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        if (indices[i] >= vertices_.size() || (i > 0 && indices[i - 1] >= indices[i])) {
+            throw std::invalid_argument("Selected positions must be sorted, distinct and inside the flow network");
+        }
+    }
+    for (const auto vertex : selected_) {
+        active_[vertex] = 0;
+    }
+    selected_.assign(indices.begin(), indices.end());
+    for (const auto vertex : selected_) {
+        active_[vertex] = 1;
+    }
+}
+
 void VertexFlow::add_arc(std::size_t from, std::size_t to, std::size_t capacity) {
     const auto reverse = network_[to].size();
     network_[to].push_back({from, network_[from].size(), 0, 0});
@@ -55,14 +75,17 @@ void VertexFlow::add_arc(std::size_t from, std::size_t to, std::size_t capacity)
 }
 
 bool VertexFlow::build_levels(std::size_t source, std::size_t target) {
-    std::fill(level_.begin(), level_.end(), unreachable);
+    for (const auto vertex : selected_) {
+        level_[2 * vertex] = unreachable;
+        level_[2 * vertex + 1] = unreachable;
+    }
     queue_.clear();
     queue_.push_back(source);
     level_[source] = 0;
     for (std::size_t head = 0; head < queue_.size(); ++head) {
         const auto current = queue_[head];
         for (const auto& edge : network_[current]) {
-            if (edge.capacity > 0 && level_[edge.to] == unreachable) {
+            if (active_[edge.to / 2] && edge.capacity > 0 && level_[edge.to] == unreachable) {
                 level_[edge.to] = level_[current] + 1;
                 queue_.push_back(edge.to);
             }
@@ -91,7 +114,7 @@ std::size_t VertexFlow::augment(std::size_t source, std::size_t target, std::siz
         auto& index = next_edge_[current];
         while (index < network_[current].size()) {
             const auto& edge = network_[current][index];
-            if (edge.capacity > 0 && level_[edge.to] == level_[current] + 1) {
+            if (active_[edge.to / 2] && edge.capacity > 0 && level_[edge.to] == level_[current] + 1) {
                 break;
             }
             ++index;
@@ -113,14 +136,19 @@ std::size_t VertexFlow::augment(std::size_t source, std::size_t target, std::siz
 PairFlow VertexFlow::between(Vertex source, Vertex target, std::size_t limit) {
     const auto left = indices_.find(source);
     const auto right = indices_.find(target);
-    if (left == indices_.end() || right == indices_.end() || source == target) {
+    if (left == indices_.end() || right == indices_.end() || source == target
+        || !active_[left->second] || !active_[right->second]) {
         throw std::invalid_argument("Flow endpoints must be distinct vertices of the subset");
     }
     // n-1 paths suffice for any threshold; a larger limit also obtains a minimum cut.
-    limit = std::min(limit, vertices_.size());
-    for (auto& edges : network_) {
-        for (auto& edge : edges) {
-            edge.capacity = edge.initial_capacity;
+    limit = std::min(limit, selected_.size());
+    for (const auto vertex : selected_) {
+        for (const auto from : {2 * vertex, 2 * vertex + 1}) {
+            for (auto& edge : network_[from]) {
+                if (active_[edge.to / 2]) {
+                    edge.capacity = edge.initial_capacity;
+                }
+            }
         }
     }
     const auto start = 2 * left->second + 1;
@@ -135,7 +163,10 @@ PairFlow VertexFlow::between(Vertex source, Vertex target, std::size_t limit) {
     }
     PairFlow result{0, {}};
     while (result.paths < limit && build_levels(start, finish)) {
-        std::fill(next_edge_.begin(), next_edge_.end(), 0);
+        for (const auto vertex : selected_) {
+            next_edge_[2 * vertex] = 0;
+            next_edge_[2 * vertex + 1] = 0;
+        }
         while (result.paths < limit) {
             const auto amount = augment(start, finish, limit - result.paths);
             if (amount == 0) {
@@ -149,23 +180,21 @@ PairFlow VertexFlow::between(Vertex source, Vertex target, std::size_t limit) {
         // Unit-capacity cuts can cross original-edge arcs as well as vertex arcs.
         // Select the head vertex, or the tail if the head is the terminal target.
         // Every crossing arc is hit without deleting either flow endpoint.
-        std::vector<bool> cut(vertices_.size(), false);
-        for (std::size_t from = 0; from < network_.size(); ++from) {
-            if (level_[from] == unreachable) {
-                continue;
-            }
-            for (const auto& edge : network_[from]) {
-                if (edge.initial_capacity > 0 && level_[edge.to] == unreachable) {
-                    const auto vertex = edge.to / 2 == right->second ? from / 2 : edge.to / 2;
-                    cut[vertex] = true;
+        for (const auto selected : selected_) {
+            for (const auto from : {2 * selected, 2 * selected + 1}) {
+                if (level_[from] == unreachable) {
+                    continue;
+                }
+                for (const auto& edge : network_[from]) {
+                    if (active_[edge.to / 2] && edge.initial_capacity > 0 && level_[edge.to] == unreachable) {
+                        const auto vertex = edge.to / 2 == right->second ? from / 2 : edge.to / 2;
+                        result.separator.push_back(vertices_[vertex]);
+                    }
                 }
             }
         }
-        for (std::size_t i = 0; i < vertices_.size(); ++i) {
-            if (cut[i]) {
-                result.separator.push_back(vertices_[i]);
-            }
-        }
+        std::sort(result.separator.begin(), result.separator.end());
+        result.separator.erase(std::unique(result.separator.begin(), result.separator.end()), result.separator.end());
     }
     return result;
 }

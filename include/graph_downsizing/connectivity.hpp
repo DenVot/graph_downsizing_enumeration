@@ -3,6 +3,7 @@
 #include "graph_downsizing/graph.hpp"
 
 #include <map>
+#include <span>
 #include <vector>
 
 namespace downsizing {
@@ -26,6 +27,9 @@ public:
     VertexFlow(const Graph& graph, VertexSet vertices,
                EdgeCapacity edge_capacity = EdgeCapacity::VertexBound);
 
+    // Sorted, distinct positions in vertices(); only this induced subset is active.
+    void select_indices(std::span<const std::size_t> indices);
+
     [[nodiscard]] PairFlow between(Vertex source, Vertex target, std::size_t limit);
     [[nodiscard]] const VertexSet& vertices() const noexcept { return vertices_; }
 
@@ -42,6 +46,8 @@ private:
     std::size_t augment(std::size_t source, std::size_t target, std::size_t limit);
 
     VertexSet vertices_;
+    std::vector<std::size_t> selected_;
+    std::vector<unsigned char> active_;
     std::map<Vertex, std::size_t> indices_;
     std::vector<std::vector<Edge>> network_;
     std::vector<std::size_t> level_;

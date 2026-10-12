@@ -243,9 +243,9 @@ private:
             }
             if (node.next_unassigned < node.total) {
                 const BigInt begin = node.next_unassigned;
-                // Small nodes also split across workers; large nodes use bounded 256-subset jobs.
+                // Small nodes also split across workers; large nodes use bounded 4096-subset jobs.
                 const BigInt balanced = (node.total + window_ - 1) / window_;
-                const BigInt length = std::min(BigInt(256), balanced);
+                const BigInt length = std::min(BigInt(4096), balanced);
                 const BigInt end = std::min(node.total, BigInt(begin + length));
                 node.ranges.emplace(begin, Range{begin, end, true});
                 node.next_unassigned = end;
@@ -288,6 +288,7 @@ private:
         const auto& vertices = *nodes_[id].vertices;
         auto indices = combination_at(vertices.size(), r_, next);
         VertexSet subset(r_);
+        VertexFlow flow(graph_, vertices);
         while (next < end && !cancelled()) {
             if (checkpoint_) {
                 checkpoint_->check();
@@ -295,7 +296,7 @@ private:
             for (std::size_t i = 0; i < r_; ++i) {
                 subset[i] = vertices[indices[i]];
             }
-            VertexFlow flow(graph_, subset);
+            flow.select_indices(indices);
             bool found = true;
             for (std::size_t i = 0; i < r_ && found; ++i) {
                 for (std::size_t j = i + 1; j < r_; ++j) {

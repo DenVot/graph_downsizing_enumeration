@@ -245,6 +245,32 @@ void test_flow() {
     expect_error([&] { static_cast<void>(flow.between(1, 1, 1)); });
     expect_error([&] { static_cast<void>(flow.between(1, 99, 1)); });
 
+    // Two routes between 10 and 30: a four-cycle. Switching masks must also
+    // discard old residual reverse arcs and stale BFS levels.
+    const auto cycle = Graph::from_edges({{10,20},{20,30},{30,40},{40,10}});
+    for (const auto capacity : {VertexFlow::EdgeCapacity::Unit, VertexFlow::EdgeCapacity::VertexBound}) {
+        VertexFlow reusable(cycle, {10,20,30,40}, capacity);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            reusable.select_indices(std::vector<std::size_t>{0,1,2,3});
+            check(reusable.between(10,30,3).paths == 2, "Full cycle has two paths");
+            reusable.select_indices(std::vector<std::size_t>{0,1,2});
+            const auto path_result = reusable.between(10,30,3);
+            check(path_result.paths == 1 && path_result.separator == VertexSet{20}, "Selected path separator");
+            check(reusable.between(30,10,1).paths == 1, "Reverse direction after residual reset");
+            reusable.select_indices(std::vector<std::size_t>{0,2});
+            const auto disconnected = reusable.between(10,30,3);
+            check(disconnected.paths == 0 && disconnected.separator.empty(), "Cut edges must block both outside routes");
+            reusable.select_indices(std::vector<std::size_t>{0,3});
+            check(reusable.between(10,40,3).paths == 1, "Direct edge contributes once");
+            expect_error([&] { static_cast<void>(reusable.between(10,20,1)); });
+            expect_error([&] { reusable.select_indices(std::vector<std::size_t>{0,4}); });
+            expect_error([&] { reusable.select_indices(std::vector<std::size_t>{0,0}); });
+            check(reusable.between(10,40,3).paths == 1, "Invalid mask must preserve the previous selection");
+            reusable.select_indices(std::vector<std::size_t>{});
+            expect_error([&] { static_cast<void>(reusable.between(10,40,1)); });
+        }
+    }
+
     std::vector<std::pair<Vertex, Vertex>> path;
     VertexSet vertices;
     for (Vertex i = 0; i < 20000; ++i) {
