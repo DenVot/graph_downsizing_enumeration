@@ -271,6 +271,18 @@ void test_flow() {
         }
     }
 
+    const auto routes = Graph::from_edges({{10,1},{1,20},{10,2},{2,20},
+                                           {10,3},{3,4},{4,20},{10,50},{50,60},{60,70}});
+    for (const auto capacity : {VertexFlow::EdgeCapacity::Unit, VertexFlow::EdgeCapacity::VertexBound}) {
+        VertexFlow layered(routes, {1,2,3,4,10,20,50,60,70}, capacity);
+        check(layered.between(10,20,2).paths == 2, "Both shortest routes must remain available");
+        check(layered.between(10,20,3).paths == 3, "A later BFS must discover the longer route");
+        const auto full = layered.between(10,20,4);
+        check(full.paths == 3 && full.separator == VertexSet({1,2,3}),
+              "Failed BFS must still exhaust reachability for the minimum separator");
+        check(layered.between(20,10,4).paths == 3, "Reverse flow after truncated BFS");
+    }
+
     std::vector<std::pair<Vertex, Vertex>> path;
     VertexSet vertices;
     for (Vertex i = 0; i < 20000; ++i) {

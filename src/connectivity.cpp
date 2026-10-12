@@ -84,6 +84,11 @@ bool VertexFlow::build_levels(std::size_t source, std::size_t target) {
     level_[source] = 0;
     for (std::size_t head = 0; head < queue_.size(); ++head) {
         const auto current = queue_[head];
+        // Finish the preceding level so all shortest paths remain available.
+        // If target is unreachable, exhaust BFS for minimum-cut extraction.
+        if (level_[target] != unreachable && level_[current] >= level_[target]) {
+            break;
+        }
         for (const auto& edge : network_[current]) {
             if (active_[edge.to / 2] && edge.capacity > 0 && level_[edge.to] == unreachable) {
                 level_[edge.to] = level_[current] + 1;
