@@ -283,6 +283,18 @@ void test_flow() {
         check(layered.between(20,10,4).paths == 3, "Reverse flow after truncated BFS");
     }
 
+    const auto complete = Graph::from_edges({{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}});
+    VertexFlow reset_flow(complete, {0,1,2,3});
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        check(reset_flow.between(0,1,0).paths == 0, "Zero threshold still caps the direct edge");
+        check(reset_flow.between(2,3,4).paths == 3, "Reset direct edge before using it internally");
+        check(reset_flow.between(3,2,1).paths == 1, "Early exit leaves tracked residuals");
+        reset_flow.select_indices(std::vector<std::size_t>{0,1});
+        check(reset_flow.between(0,1,2).paths == 1, "Mask switch resets tracked arcs outside selection");
+        reset_flow.select_indices(std::vector<std::size_t>{0,1,2,3});
+        check(reset_flow.between(1,0,4).paths == 3, "Reactivated arcs have original capacities");
+    }
+
     std::vector<std::pair<Vertex, Vertex>> path;
     VertexSet vertices;
     for (Vertex i = 0; i < 20000; ++i) {

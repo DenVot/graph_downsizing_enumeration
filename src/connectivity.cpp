@@ -59,6 +59,7 @@ void VertexFlow::select_indices(std::span<const std::size_t> indices) {
             throw std::invalid_argument("Selected positions must be sorted, distinct and inside the flow network");
         }
     }
+    reset_capacities();
     for (const auto vertex : selected_) {
         active_[vertex] = 0;
     }
@@ -66,6 +67,16 @@ void VertexFlow::select_indices(std::span<const std::size_t> indices) {
     for (const auto vertex : selected_) {
         active_[vertex] = 1;
     }
+}
+
+void VertexFlow::reset_capacities() {
+    for (const auto& [from, index] : changed_) {
+        auto& edge = network_[from][index];
+        auto& reverse = network_[edge.to][edge.reverse];
+        edge.capacity = edge.initial_capacity;
+        reverse.capacity = reverse.initial_capacity;
+    }
+    changed_.clear();
 }
 
 void VertexFlow::add_arc(std::size_t from, std::size_t to, std::size_t capacity) {
@@ -109,6 +120,8 @@ std::size_t VertexFlow::augment(std::size_t source, std::size_t target, std::siz
             for (const auto& [from, index] : path_) {
                 amount = std::min(amount, network_[from][index].capacity);
             }
+            // Record before mutation; repeated entries are harmless during reset.
+            changed_.insert(changed_.end(), path_.begin(), path_.end());
             for (const auto& [from, index] : path_) {
                 auto& edge = network_[from][index];
                 edge.capacity -= amount;
@@ -147,20 +160,16 @@ PairFlow VertexFlow::between(Vertex source, Vertex target, std::size_t limit) {
     }
     // n-1 paths suffice for any threshold; a larger limit also obtains a minimum cut.
     limit = std::min(limit, selected_.size());
-    for (const auto vertex : selected_) {
-        for (const auto from : {2 * vertex, 2 * vertex + 1}) {
-            for (auto& edge : network_[from]) {
-                if (active_[edge.to / 2]) {
-                    edge.capacity = edge.initial_capacity;
-                }
-            }
-        }
-    }
+    reset_capacities();
     const auto start = 2 * left->second + 1;
     const auto finish = 2 * right->second;
     bool adjacent = false;
-    for (auto& edge : network_[start]) {
+    for (std::size_t index = 0; index < network_[start].size(); ++index) {
+        auto& edge = network_[start][index];
         if (edge.to == finish && edge.initial_capacity > 0) {
+            if (edge.capacity != 1) {
+                changed_.emplace_back(start, index);
+            }
             edge.capacity = 1; // The direct edge contributes exactly one path.
             adjacent = true;
             break;
