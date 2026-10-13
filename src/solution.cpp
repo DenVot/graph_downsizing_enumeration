@@ -1,9 +1,8 @@
 #include "graph_downsizing/solution.hpp"
-#include "graph_downsizing/alpha.hpp"
+#include "graph_downsizing/sizes.hpp"
 
 #include <algorithm>
 #include <fstream>
-#include <iomanip>
 #include <locale>
 #include <set>
 #include <sstream>
@@ -29,15 +28,14 @@ void check_solution(const Graph& graph, std::size_t r, const Solution& solution)
 
 } // namespace
 
-std::size_t write_solution_blocks(std::ostream& output, const Graph& graph, double alpha_step,
+std::size_t write_solution_blocks(std::ostream& output, const Graph& graph, const std::vector<std::size_t>& sizes,
                              const SolutionsBySize& solutions) {
-    AlphaSchedule schedule(alpha_step, graph.vertex_count());
     for (const auto& [r, solution] : solutions) {
         check_solution(graph, r, solution);
     }
     std::size_t blocks = 0;
-    while (const auto task = schedule.next()) {
-        const auto found = solutions.find(task->r);
+    for (const auto r : sizes) {
+        const auto found = solutions.find(r);
         if (found == solutions.end()) {
             break;
         }
@@ -54,7 +52,7 @@ std::size_t write_solution_blocks(std::ostream& output, const Graph& graph, doub
         // A separate header stream keeps caller locale/base flags out of the file format.
         std::ostringstream header;
         header.imbue(std::locale::classic());
-        header << std::setprecision(15) << task->alpha << ' ' << task->r << ' '
+        header << r << ' '
                << solution.connectivity << ' ' << edges << '\n';
         output << header.str();
         for (const auto u : vertices) {
@@ -72,7 +70,7 @@ std::size_t write_solution_blocks(std::ostream& output, const Graph& graph, doub
     return blocks;
 }
 
-void save_solution_file(const std::filesystem::path& path, const Graph& graph, double alpha_step,
+void save_solution_file(const std::filesystem::path& path, const Graph& graph, const std::vector<std::size_t>& sizes,
                         const SolutionsBySize& solutions) {
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
     auto temporary = path;
@@ -83,7 +81,7 @@ void save_solution_file(const std::filesystem::path& path, const Graph& graph, d
     try {
         std::ofstream output(temporary);
         if (!output) throw std::runtime_error("Cannot open temporary solution file: " + temporary.string());
-        static_cast<void>(write_solution_blocks(output, graph, alpha_step, solutions));
+        static_cast<void>(write_solution_blocks(output, graph, sizes, solutions));
         output.close();
         if (!output) throw std::runtime_error("Failed to save solution file: " + temporary.string());
         std::filesystem::rename(temporary, path);

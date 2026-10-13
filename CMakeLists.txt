@@ -19,7 +19,7 @@ add_library(graph_downsizing_core
     src/combinations.cpp
     src/parallel_search.cpp
     src/worker_pool.cpp
-    src/alpha.cpp
+    src/sizes.cpp
     src/config.cpp
     src/connectivity.cpp
     src/degree_filter.cpp
@@ -69,7 +69,7 @@ if(BUILD_TESTING)
     add_executable(graph_downsizing_tests tests/test_core.cpp)
     target_link_libraries(graph_downsizing_tests PRIVATE graph_downsizing_core)
     graph_downsizing_compile_options(graph_downsizing_tests)
-    foreach(group alpha config graph solution)
+    foreach(group sizes config graph solution)
         add_test(NAME ${group} COMMAND graph_downsizing_tests ${group})
     endforeach()
     add_executable(graph_downsizing_algorithm_tests tests/test_algorithms.cpp)

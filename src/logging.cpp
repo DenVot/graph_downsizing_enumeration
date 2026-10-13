@@ -96,9 +96,9 @@ RunLogger::~RunLogger() {
     }
 }
 
-void RunLogger::search(const std::string& graph, double alpha, std::size_t r) {
+void RunLogger::search(const std::string& graph, std::size_t r) {
     std::ostringstream text;
-    text << "graph=" << std::quoted(graph) << " phase=search alpha=" << std::setprecision(15) << alpha << " r=" << r;
+    text << "graph=" << std::quoted(graph) << " phase=search r=" << r;
     std::lock_guard lock(mutex_);
     context_ = text.str();
     progress_ = {};

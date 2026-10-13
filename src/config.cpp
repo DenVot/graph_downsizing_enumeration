@@ -1,6 +1,6 @@
 #include "graph_downsizing/config.hpp"
 
-#include "graph_downsizing/alpha.hpp"
+#include "graph_downsizing/sizes.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -158,7 +158,7 @@ Config read_config(const std::filesystem::path& path) {
         }
         config.alpha_step = document["alpha_step"].get<double>();
     }
-    (void)AlphaSchedule(config.alpha_step, 1);
+    (void)make_sizes(config.alpha_step, 1);
     config.threads = static_cast<std::size_t>(positive_field(document, "threads",
         std::max(1U, std::thread::hardware_concurrency()), std::numeric_limits<std::size_t>::max()));
     config.range_size = static_cast<std::size_t>(positive_field(document, "range_size",

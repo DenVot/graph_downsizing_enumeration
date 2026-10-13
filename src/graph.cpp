@@ -12,6 +12,50 @@
 namespace downsizing {
 namespace {
 
+std::string_view trim(std::string_view text) {
+    const auto begin = text.find_first_not_of(" \t\r");
+    if (begin == std::string_view::npos) {
+        return {};
+    }
+    return text.substr(begin, text.find_last_not_of(" \t\r") - begin + 1);
+}
+
+RequestedSizes parse_requested_sizes(std::string_view line) {
+    line = trim(line);
+    const bool sizes = line.starts_with("r:");
+    if (!sizes && !line.starts_with("alpha:")) {
+        return {};
+    }
+    line.remove_prefix(sizes ? 2 : 6);
+    RequestedSizes result;
+    while (true) {
+        const auto comma = line.find(',');
+        const auto token = trim(line.substr(0, comma));
+        if (token.empty()) {
+            throw std::invalid_argument("Empty value in requested sizes header");
+        }
+        if (sizes) {
+            std::size_t value = 0;
+            const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), value);
+            if (error != std::errc{} || end != token.data() + token.size() || value == 0) {
+                throw std::invalid_argument("Requested r must be a positive integer");
+            }
+            result.sizes.push_back(value);
+        } else {
+            double value = 0;
+            const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), value);
+            if (error != std::errc{} || end != token.data() + token.size() || !(value > 0 && value <= 1)) {
+                throw std::invalid_argument("Requested alpha must be in (0, 1]");
+            }
+            result.alphas.push_back(value);
+        }
+        if (comma == std::string_view::npos) {
+            return result;
+        }
+        line.remove_prefix(comma + 1);
+    }
+}
+
 VertexId parse_id(std::string_view text) {
     if (!text.empty() && text.front() == '+') {
         text.remove_prefix(1);
@@ -66,7 +110,7 @@ Graph Graph::from_edges(std::vector<std::pair<VertexId, VertexId>> edges) {
     return graph;
 }
 
-Graph read_graph(const std::filesystem::path& path) {
+GraphInput read_graph_input(const std::filesystem::path& path) {
     if (!std::filesystem::is_regular_file(path)) {
         throw std::runtime_error("Graph file does not exist or is not a regular file: " + path.string());
     }
@@ -77,6 +121,7 @@ Graph read_graph(const std::filesystem::path& path) {
     std::vector<std::pair<VertexId, VertexId>> edges;
     std::string line;
     std::size_t line_number = 0;
+    RequestedSizes requested;
     while (std::getline(input, line)) {
         ++line_number;
         std::istringstream tokens(line);
@@ -85,6 +130,12 @@ Graph read_graph(const std::filesystem::path& path) {
             continue;
         }
         try {
+            if (line_number == 1) {
+                requested = parse_requested_sizes(line);
+                if (!requested.sizes.empty() || !requested.alphas.empty()) {
+                    continue;
+                }
+            }
             std::string second;
             std::string extra;
             if (!(tokens >> second) || (tokens >> extra)) {
@@ -104,10 +155,17 @@ Graph read_graph(const std::filesystem::path& path) {
         throw std::runtime_error("Failed to read graph file: " + path.string());
     }
     try {
-        return Graph::from_edges(std::move(edges));
+        auto graph = Graph::from_edges(std::move(edges));
+        // Validate explicit r against the graph size before any calculation starts.
+        static_cast<void>(make_sizes(1, graph.vertex_count(), requested));
+        return {std::move(graph), std::move(requested)};
     } catch (const std::invalid_argument& error) {
         throw std::runtime_error(path.string() + ": " + error.what());
     }
+}
+
+Graph read_graph(const std::filesystem::path& path) {
+    return read_graph_input(path).graph;
 }
 
 } // namespace downsizing

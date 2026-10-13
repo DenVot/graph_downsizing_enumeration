@@ -1,5 +1,7 @@
 #pragma once
 
+#include "graph_downsizing/sizes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -30,5 +32,12 @@ private:
 };
 
 [[nodiscard]] Graph read_graph(const std::filesystem::path& path);
+
+struct GraphInput {
+    Graph graph;
+    RequestedSizes requested;
+};
+
+[[nodiscard]] GraphInput read_graph_input(const std::filesystem::path& path);
 
 } // namespace downsizing

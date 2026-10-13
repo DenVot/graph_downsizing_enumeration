@@ -22,7 +22,7 @@ public:
     RunLogger& operator=(const RunLogger&) = delete;
 
     void search_progress(const SolveProgress& progress);
-    void search(const std::string& graph, double alpha, std::size_t r);
+    void search(const std::string& graph, std::size_t r);
     void info(const std::string& message);
     void error(const std::string& message);
     void context(const std::string& graph, const std::string& phase, std::size_t r = 0);

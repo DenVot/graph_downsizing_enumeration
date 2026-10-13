@@ -1,4 +1,4 @@
-#include "graph_downsizing/alpha.hpp"
+#include "graph_downsizing/sizes.hpp"
 #include "graph_downsizing/checkpoint.hpp"
 #include "graph_downsizing/logging.hpp"
 #include "graph_downsizing/config.hpp"
@@ -27,9 +27,9 @@ void help() {
                  "  graph_downsizing resume --checkpoint DIRECTORY --config FILE\n"
                  "  graph_downsizing --help\n"
                  "  graph_downsizing --version\n\n"
-                 "validate reads inputs and previews up to 20 alpha/r tasks per graph.\n"
+                 "validate reads inputs and previews up to 20 r tasks per graph.\n"
                  "tree builds the exact hierarchy and previews up to 20 nodes per graph.\n"
-                 "run solves alpha/r tasks using a shared worker pool and writes solution files.\n"
+                 "run solves r tasks using a shared worker pool and writes solution files.\n"
                  "resume continues from a JSON checkpoint; active nodes resume at their saved subset.\n";
 }
 
@@ -77,40 +77,32 @@ Arguments parse_arguments(int argc, char** argv) {
 
 void validate(const downsizing::Config& config) {
     std::cout << "Validation only: no enumeration, output files, or GitHub uploads.\n"
-              << std::setprecision(15) << "alpha_step=" << config.alpha_step << " threads=" << config.threads
+              << "threads=" << config.threads
               << " range_size=" << config.range_size
               << " checkpoint_interval_seconds=" << config.checkpoint_interval.count()
               << " github=" << (config.github.enabled ? "configured" : "disabled") << '\n';
     for (std::size_t i = 0; i < config.inputs.size(); ++i) {
-        const auto graph = downsizing::read_graph(config.inputs[i]);
-        downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
+        const auto loaded = downsizing::read_graph_input(config.inputs[i]);
+        const auto& graph = loaded.graph;
+        const auto sizes = downsizing::make_sizes(config.alpha_step, graph.vertex_count(), loaded.requested);
         std::cout << "graph=" << config.inputs[i].string() << " vertices=" << graph.vertex_count()
-                  << " edges=" << graph.edge_count() << " alpha_tasks=" << schedule.task_count()
+                  << " edges=" << graph.edge_count() << " size_tasks=" << sizes.size()
                   << " output=" << downsizing::solution_path(config, i).string() << '\n';
-        std::size_t previous_r = 0;
-        for (std::size_t preview = 0; preview < 20; ++preview) {
-            const auto task = schedule.next();
-            if (!task) {
-                break;
-            }
-            std::cout << "  alpha=" << task->alpha << " r=" << task->r;
-            if (task->r == previous_r) {
-                std::cout << " (reuse previous r)";
-            }
-            std::cout << '\n';
-            previous_r = task->r;
+        for (std::size_t preview = 0; preview < std::min(std::size_t{20}, sizes.size()); ++preview) {
+            std::cout << "  r=" << sizes[preview] << '\n';
         }
-        if (schedule.task_count() > 20) {
-            std::cout << "  ... preview limited to 20 tasks; alpha=1 is always included.\n";
+        if (sizes.size() > 20) {
+            std::cout << "  ... preview limited to 20 tasks.\n";
         }
     }
 }
 
 void inspect_tree(const downsizing::Config& config) {
     for (const auto& input : config.inputs) {
-        const auto graph = downsizing::read_graph(input);
-        downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
-        const auto minimum_size = schedule.next()->r;
+        const auto loaded = downsizing::read_graph_input(input);
+        const auto& graph = loaded.graph;
+        const auto sizes = downsizing::make_sizes(config.alpha_step, graph.vertex_count(), loaded.requested);
+        const auto minimum_size = sizes.front();
         std::cout << "Building tree: graph=" << input.string() << " minimum_r=" << minimum_size
                   << std::endl;
         const auto tree = downsizing::build_tree(graph, minimum_size);
@@ -179,12 +171,12 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
     downsizing::install_stop_handlers();
     // Input graphs remain external and must be unchanged when resuming.
     std::vector<nlohmann::json> metadata;
+    std::vector<std::vector<std::size_t>> tasks;
     for (const auto& input : config.inputs) {
-        metadata.push_back({
-            {"algorithm", "node-cursor-v1"},
-            {"input", input.filename().string()},
-            {"alpha_step", config.alpha_step}
-        });
+        const auto loaded = downsizing::read_graph_input(input);
+        tasks.push_back(downsizing::make_sizes(config.alpha_step, loaded.graph.vertex_count(), loaded.requested));
+        metadata.push_back({{"algorithm", "node-cursor-v1"}, {"input", input.filename().string()},
+                            {"sizes", tasks.back()}});
     }
     downsizing::Checkpoint checkpoint(checkpoint_path, restoring, config.checkpoint_interval, metadata);
     downsizing::WorkerPool pool(config.threads);
@@ -198,14 +190,14 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
         for (std::size_t i = 0; i < config.inputs.size(); ++i) {
             const auto graph_id = config.inputs[i].stem().string();
             logger.context(graph_id, "read_graph");
-            const auto graph = downsizing::read_graph(config.inputs[i]);
+            const auto loaded = downsizing::read_graph_input(config.inputs[i]);
+            const auto& graph = loaded.graph;
             logger.info("event=graph_loaded vertices=" + std::to_string(graph.vertex_count()) +
                         " edges=" + std::to_string(graph.edge_count()));
-            downsizing::AlphaSchedule schedule(config.alpha_step, graph.vertex_count());
-            auto task = schedule.next();
+            const auto& sizes = tasks[i];
             logger.context(graph_id, "build_tree");
-            logger.info("event=tree_started minimum_r=" + std::to_string(task->r));
-            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, graph_id, config.range_size);
+            logger.info("event=tree_started minimum_r=" + std::to_string(sizes.front()));
+            downsizing::ExactSolver solver(graph, sizes.front(), pool, &checkpoint, graph_id, config.range_size);
             logger.info("event=tree_ready nodes=" + std::to_string(solver.tree().nodes.size()) +
                         " maximum_k=" + std::to_string(solver.tree().levels.size() - 1));
             const auto destination = downsizing::solution_path(config, i);
@@ -215,23 +207,23 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
                 temporary += ".tmp";
                 std::filesystem::remove(temporary);
             }
-            do {
-                const bool reused = solver.solutions().contains(task->r);
-                logger.search(graph_id, task->alpha, task->r);
+            for (const auto r : sizes) {
+                const bool reused = solver.solutions().contains(r);
+                logger.search(graph_id, r);
                 std::ostringstream result;
-                result << std::setprecision(15) << "event=solution alpha=" << task->alpha << " r=" << task->r;
-                const auto& solution = solver.solve(task->r, [&](const downsizing::SolveProgress& progress) {
+                result << "event=solution r=" << r;
+                const auto& solution = solver.solve(r, [&](const downsizing::SolveProgress& progress) {
                     logger.search_progress(progress);
                 });
                 if (!reused) {
-                    downsizing::save_solution_file(destination, graph, config.alpha_step, solver.solutions());
+                    downsizing::save_solution_file(destination, graph, sizes, solver.solutions());
                 }
                 result << " k=" << solution.connectivity << (reused ? " reused" : " computed");
-                if (task->r == 1) {
+                if (r == 1) {
                     result << " vertex=" << solution.vertices.front();
                 }
                 logger.info(result.str());
-            } while ((task = schedule.next()));
+            }
             logger.info("event=graph_finished output=" + destination.string() +
                         " unique_sizes=" + std::to_string(solver.solutions().size()));
         }

@@ -1,4 +1,4 @@
-#include "graph_downsizing/alpha.hpp"
+#include "graph_downsizing/sizes.hpp"
 #include "graph_downsizing/config.hpp"
 #include "graph_downsizing/graph.hpp"
 #include "graph_downsizing/solution.hpp"
@@ -69,54 +69,31 @@ private:
     std::filesystem::path path_;
 };
 
-void test_alpha() {
-    downsizing::AlphaSchedule defaults(0.1, 70);
-    check(defaults.task_count() == 10, "Default grid must have 10 tasks");
-    for (std::size_t i = 1; i <= 10; ++i) {
-        const auto task = defaults.next();
-        check(task && task->r == 7 * i, "Wrong r at a floating-point boundary");
-        check(std::abs(task->alpha - static_cast<double>(i) / 10) < 1e-14, "Wrong alpha");
-    }
-    check(!defaults.next() && !defaults.next(), "Exhausted grid must remain exhausted");
-
-    downsizing::AlphaSchedule uneven(0.3, 9);
-    const std::vector<double> alphas{0.3, 0.6, 0.9, 1};
-    const std::vector<std::size_t> sizes{2, 5, 8, 9};
-    check(uneven.task_count() == 4, "Wrong uneven task count");
-    for (std::size_t i = 0; i < alphas.size(); ++i) {
-        const auto task = uneven.next();
-        check(task && std::abs(task->alpha - alphas[i]) < 1e-14 && task->r == sizes[i], "Wrong uneven grid");
-    }
-    check(!uneven.next(), "Final 1 must occur once");
-
-    downsizing::AlphaSchedule duplicates(0.1, 3);
-    for (const auto size : std::vector<std::size_t>{1, 1, 1, 1, 1, 1, 2, 2, 2, 3}) {
-        const auto task = duplicates.next();
-        check(task && task->r == size, "Small graph must retain every alpha with minimum r=1");
-    }
-    downsizing::AlphaSchedule one(1, 5);
-    check(one.task_count() == 1 && one.next()->r == 5 && !one.next(), "Step 1 must produce only the full graph");
-    downsizing::AlphaSchedule tiny(1e-6, 100);
-    check(tiny.task_count() == 1000000 && tiny.next()->r == 1, "Small steps must be generated lazily");
-    downsizing::AlphaSchedule boundary(0.29, 100);
-    check(boundary.next()->r == 29, "0.29 times 100 must not lose a vertex to roundoff");
-    // Independent integer reference for ordinary decimal steps and graph sizes.
+void test_sizes() {
+    using downsizing::make_sizes;
+    check(make_sizes(0.3, 9) == std::vector<std::size_t>({2, 5, 8, 9}), "Uneven grid");
+    check(make_sizes(0.1, 3) == std::vector<std::size_t>({1, 2, 3}), "Duplicate sizes must collapse");
+    check(make_sizes(1, 5) == std::vector<std::size_t>({5}), "Full graph only");
+    check(make_sizes(1e-15, 100).size() == 100, "Tiny grid must skip repeated sizes");
+    check(make_sizes(0.29, 100).front() == 29, "Floating boundary");
+    check(make_sizes(0.1, 10, {{7, 3, 7}, {}}) == std::vector<std::size_t>({3, 7}), "Explicit r");
+    check(make_sizes(0.1, 10, {{}, {0.31, 0.7, 0.39}}) == std::vector<std::size_t>({3, 7}), "Equivalent alpha sizes");
     for (std::size_t numerator = 1; numerator <= 100; ++numerator) {
         for (std::size_t n = 1; n <= 80; ++n) {
-            downsizing::AlphaSchedule grid(static_cast<double>(numerator) / 100, n);
-            std::size_t fraction = 0;
-            while (const auto task = grid.next()) {
-                fraction = std::min(std::size_t{100}, fraction + numerator);
-                check(task->r == std::max(std::size_t{1}, fraction * n / 100), "Grid differs from integer reference");
+            std::vector<std::size_t> expected;
+            for (std::size_t fraction = numerator; fraction < 100; fraction += numerator) {
+                expected.push_back(std::max(std::size_t{1}, fraction * n / 100));
             }
-            check(fraction == 100, "Reference grid did not reach 1");
+            expected.push_back(n);
+            expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+            check(make_sizes(static_cast<double>(numerator) / 100, n) == expected, "Grid differs from integer reference");
         }
     }
     for (const double invalid : {0.0, -0.1, 1.1, std::numeric_limits<double>::quiet_NaN(),
                                 std::numeric_limits<double>::infinity(), 1e-30}) {
-        expect_error([&] { downsizing::AlphaSchedule schedule(invalid, 3); }, "alpha_step");
+        expect_error([&] { (void)make_sizes(invalid, 3); }, "alpha_step");
     }
-    expect_error([] { downsizing::AlphaSchedule schedule(0.1, 0); }, "nonempty graph");
+    expect_error([] { (void)make_sizes(0.1, 0); }, "nonempty graph");
 }
 
 void test_config() {
@@ -228,6 +205,12 @@ void test_config() {
 
 void test_graph() {
     TemporaryDirectory directory;
+    for (const auto header : {"r: 3, 1, 3", "alpha: 1, 0.2, 0.3, 0.2"}) {
+        const auto input = directory.write("selected.txt", std::string(header) + "\r\n1 2\n2 3\n3 1\n");
+        const auto loaded = downsizing::read_graph_input(input);
+        const auto sizes = downsizing::make_sizes(0.1, loaded.graph.vertex_count(), loaded.requested);
+        check(sizes == std::vector<std::size_t>({1, 3}), "Header must yield unique sorted sizes");
+    }
     auto file = directory.write("graph.txt", "\n # comment\r\n\t% metadata\n +70 -9\n-9 70\n70 400\n400 -9\n");
     const auto graph = downsizing::read_graph(file);
     check(graph.vertex_count() == 3 && graph.edge_count() == 3, "Graph parsing or edge deduplication failed");
@@ -251,6 +234,13 @@ void test_graph() {
         {"1 9223372036854775808\n", ":1:"}, {"1 -9223372036854775809\n", ":1:"},
         {"1 +-2\n", ":1:"}, {"1 2\n\n# comment\n3\n", ":4:"},
         {"1 2\n3 4\n", "disconnected"},
+        {"r:\n1 2\n", "Empty value"}, {"r: 1,\n1 2\n", "Empty value"},
+        {"r: 0\n1 2\n", "positive integer"}, {"r: -1\n1 2\n", "positive integer"},
+        {"r: 1.5\n1 2\n", "positive integer"}, {"r: 3\n1 2\n", "vertex count"},
+        {"alpha: nan\n1 2\n", "(0, 1]"}, {"alpha: inf\n1 2\n", "(0, 1]"},
+        {"alpha: 0\n1 2\n", "(0, 1]"}, {"alpha: 1.1\n1 2\n", "(0, 1]"},
+        {"alpha: 0.1,,0.2\n1 2\n", "Empty value"},
+        {"r: 1\nalpha: 0.5\n1 2\n", ":2:"},
     };
     for (const auto& [contents, expected] : invalid) {
         file = directory.write("invalid.txt", contents);
@@ -283,18 +273,17 @@ void test_solution() {
     const downsizing::SolutionsBySize solutions{{1, {0, {42}}}, {2, {1, {900, -8}}}, {3, {2, {900, 42, -8}}}};
     std::ostringstream output;
     output << std::hex; // Caller numeric flags must not affect the output format.
-    check(downsizing::write_solution_blocks(output, graph, 0.2, solutions) == 5, "Missing duplicate-r output blocks");
-    const std::string expected = "0.2 1 0 0\n0.4 1 0 0\n0.6 1 0 0\n0.8 2 1 1\n-8 900\n1 3 2 3\n-8 42\n-8 900\n42 900\n";
+    check(downsizing::write_solution_blocks(output, graph, {1, 2, 3}, solutions) == 3, "One block per r");
+    const std::string expected = "1 0 0\n2 1 1\n-8 900\n3 2 3\n-8 42\n-8 900\n42 900\n";
     check(output.str() == expected, "Block header, original IDs, induced edges or order failed");
 
     // Parse the result as a consumer would: m controls the exact number of following edge lines.
     std::istringstream reader(output.str());
     std::size_t blocks = 0;
-    double alpha = 0;
     std::size_t r = 0;
     std::size_t k = 0;
     std::size_t m = 0;
-    while (reader >> alpha >> r >> k >> m) {
+    while (reader >> r >> k >> m) {
         check(r > 0 && k < r, "Output must include a valid r");
         for (std::size_t i = 0; i < m; ++i) {
             downsizing::VertexId u = 0;
@@ -303,15 +292,15 @@ void test_solution() {
         }
         ++blocks;
     }
-    check(reader.eof() && blocks == 5, "Output blocks are not self-delimiting");
+    check(reader.eof() && blocks == 3, "Output blocks are not self-delimiting");
 
     std::ostringstream partial;
     const downsizing::SolutionsBySize prefix{{1, {0, {42}}}, {3, {2, {-8, 42, 900}}}};
-    check(downsizing::write_solution_blocks(partial, graph, 0.2, prefix) == 3, "Incomplete output must stop at first missing r");
-    check(partial.str() == "0.2 1 0 0\n0.4 1 0 0\n0.6 1 0 0\n", "Later answers must not bypass an unfinished earlier r");
+    check(downsizing::write_solution_blocks(partial, graph, {1, 2, 3}, prefix) == 1, "Incomplete output must stop at first missing r");
+    check(partial.str() == "1 0 0\n", "Later answers must not bypass an unfinished earlier r");
 
     std::ostringstream empty;
-    check(downsizing::write_solution_blocks(empty, graph, 0.1, {}) == 0 && empty.str().empty(), "No results must produce no blocks");
+    check(downsizing::write_solution_blocks(empty, graph, {1, 2, 3}, {}) == 0 && empty.str().empty(), "No results must produce no blocks");
 
     const std::vector<downsizing::SolutionsBySize> invalid{
         {{0, {0, {}}}}, {{1, {0, {}}}}, {{2, {1, {0}}}},
@@ -319,7 +308,7 @@ void test_solution() {
     };
     for (const auto& answers : invalid) {
         std::ostringstream destination;
-        expect_error([&] { (void)downsizing::write_solution_blocks(destination, graph, 0.1, answers); }, "Solution");
+        expect_error([&] { (void)downsizing::write_solution_blocks(destination, graph, {1, 2, 3}, answers); }, "Solution");
         check(destination.str().empty(), "Invalid witness must be rejected before writing");
     }
     TemporaryDirectory directory;
@@ -330,20 +319,20 @@ void test_solution() {
         contents << input.rdbuf();
         return contents.str();
     };
-    expect_error([&] { downsizing::save_solution_file(destination, graph, 0.2, invalid.front()); }, "Solution");
+    expect_error([&] { downsizing::save_solution_file(destination, graph, {1, 2, 3}, invalid.front()); }, "Solution");
     check(read_saved() == "previous result", "Failed write must preserve previous output");
     check(!std::filesystem::exists(destination.string() + ".tmp"), "Failed write must remove its temporary file");
-    downsizing::save_solution_file(destination, graph, 0.2, solutions);
+    downsizing::save_solution_file(destination, graph, {1, 2, 3}, solutions);
     std::ostringstream expected_file;
-    static_cast<void>(downsizing::write_solution_blocks(expected_file, graph, 0.2, solutions));
+    static_cast<void>(downsizing::write_solution_blocks(expected_file, graph, {1, 2, 3}, solutions));
     check(read_saved() == expected_file.str(), "Saved file must contain the complete formatted answer");
     static_cast<void>(directory.write("answer.txt.tmp", "unfinished earlier write"));
-    expect_error([&] { downsizing::save_solution_file(destination, graph, 0.2, solutions); }, "already exists");
+    expect_error([&] { downsizing::save_solution_file(destination, graph, {1, 2, 3}, solutions); }, "already exists");
     check(read_saved() == expected_file.str(), "Temporary-file conflict must not change the saved answer");
 
     std::ostringstream broken;
     broken.setstate(std::ios::badbit);
-    expect_error([&] { (void)downsizing::write_solution_blocks(broken, graph, 0.1, solutions); }, "Failed to write");
+    expect_error([&] { (void)downsizing::write_solution_blocks(broken, graph, {1, 2, 3}, solutions); }, "Failed to write");
 }
 
 } // namespace
@@ -354,8 +343,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("Expected one test group");
         }
         const std::string_view group(argv[1]);
-        if (group == "alpha") {
-            test_alpha();
+        if (group == "sizes") {
+            test_sizes();
         } else if (group == "config") {
             test_config();
         } else if (group == "graph") {
