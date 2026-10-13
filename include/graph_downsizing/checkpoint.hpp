@@ -25,16 +25,17 @@ struct Interrupted : std::runtime_error {
 
 void install_stop_handlers();
 
-// One writer per range. Only snapshot readers contend for this private mutex.
+// One writer per range; at most SIZE_MAX advances during its lifetime.
 class RangeCursor {
 public:
-    explicit RangeCursor(BigInt next) : next_(std::move(next)) {}
+    explicit RangeCursor(BigInt next) : begin_(std::move(next)) {}
     void advance();
     [[nodiscard]] BigInt snapshot() const;
 
 private:
-    mutable std::mutex mutex_;
-    BigInt next_;
+    static_assert(std::atomic<std::size_t>::is_always_lock_free);
+    const BigInt begin_;
+    std::atomic<std::size_t> processed_{0};
 };
 
 using RangeCursors = std::map<std::string, std::shared_ptr<RangeCursor>>;

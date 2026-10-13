@@ -75,7 +75,7 @@ try:
         inputs = root / "graphs"
         inputs.mkdir()
         graph = inputs / "cycle.txt"
-        n = 30  # Keep enumeration alive through periodic saves with reused flow networks.
+        n = 34  # Keep enumeration alive through periodic saves with atomic cursors.
         graph.write_text("".join(f"{i} {(i + 1) % n}\n" for i in range(n)))
         triangle = inputs / "a_triangle.txt"
         triangle.write_text("100 200\n200 300\n100 300\n")

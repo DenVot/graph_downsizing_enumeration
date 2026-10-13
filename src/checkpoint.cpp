@@ -71,13 +71,12 @@ nlohmann::json read_json(const std::filesystem::path& path) {
 } // namespace
 
 void RangeCursor::advance() {
-    std::lock_guard lock(mutex_);
-    ++next_;
+    processed_.fetch_add(1, std::memory_order_relaxed);
 }
 
 BigInt RangeCursor::snapshot() const {
-    std::lock_guard lock(mutex_);
-    return next_;
+    // Only the count is published; no other mutable data depends on it.
+    return begin_ + processed_.load(std::memory_order_relaxed);
 }
 
 void install_stop_handlers() {

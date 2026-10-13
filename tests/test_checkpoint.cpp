@@ -25,6 +25,29 @@ int main() {
     std::filesystem::create_directories(directory);
     try {
         install_stop_handlers();
+        {
+            const BigInt start = (BigInt(1) << 130) - 1;
+            RangeCursor cursor(start);
+            std::barrier gate(2);
+            std::jthread writer([&] {
+                gate.arrive_and_wait();
+                for (int i = 0; i < 10000; ++i) {
+                    cursor.advance();
+                }
+            });
+            gate.arrive_and_wait();
+            BigInt previous = start;
+            for (int i = 0; i < 10000; ++i) {
+                const auto current = cursor.snapshot();
+                check(current >= previous && current <= start + 10000, "Atomic cursor snapshot out of bounds");
+                previous = current;
+            }
+            writer.join();
+            check(cursor.snapshot() == start + 10000, "Atomic cursor lost progress above machine-word rank");
+            RangeCursor resumed(cursor.snapshot());
+            resumed.advance();
+            check(resumed.snapshot() == start + 10001, "Resumed cursor did not continue from saved rank");
+        }
         const auto path = directory / "state";
         const auto cycle = Graph::from_edges({{0,1},{1,2},{2,3},{3,4},{4,5},{5,0}});
         const VertexSet vertices{0,1,2,3,4,5};

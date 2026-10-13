@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <map>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 
@@ -13,7 +14,12 @@ namespace {
 
 struct Range {
     Range(BigInt next, BigInt limit, bool accepted = false)
-        : cursor(std::make_shared<RangeCursor>(std::move(next))), end(std::move(limit)), submitted(accepted) {}
+        : end(std::move(limit)), submitted(accepted) {
+        if (next > end || end - next > std::numeric_limits<std::size_t>::max()) {
+            throw std::runtime_error("Checkpoint range exceeds cursor capacity");
+        }
+        cursor = std::make_shared<RangeCursor>(std::move(next));
+    }
 
     std::shared_ptr<RangeCursor> cursor;
     BigInt end;
