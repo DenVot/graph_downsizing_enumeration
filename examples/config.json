@@ -2,6 +2,7 @@
   "input_directory": ".",
   "alpha_step": 0.1,
   "threads": 32,
+  "range_size": 131072,
   "working_directory": "../runs",
   "checkpoint_interval_seconds": 60,
   "log_interval_seconds": 10,

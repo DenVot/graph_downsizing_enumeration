@@ -1,3 +1,4 @@
+#include "graph_downsizing/degree_filter.hpp"
 #include "graph_downsizing/connectivity.hpp"
 #include "graph_downsizing/global_cut.hpp"
 #include "graph_downsizing/tree.hpp"
@@ -306,18 +307,22 @@ void test_flow() {
             edges.emplace_back(labels[i], labels[(i + 1) % n]);
         }
         const auto ring = Graph::from_edges(edges);
-        for (const auto capacity : {VertexFlow::EdgeCapacity::Unit, VertexFlow::EdgeCapacity::VertexBound}) {
-            VertexFlow degrees(ring, labels, capacity);
-            check(degrees.has_minimum_degree(2) && !degrees.has_minimum_degree(3), "Cycle degree is two");
-            static_cast<void>(degrees.between(labels[0], labels[1], 2));
-            check(degrees.has_minimum_degree(2), "Degree ignores residual capacities");
-            degrees.select_indices(std::vector<std::size_t>{0, n - 1});
-            check(degrees.has_minimum_degree(1) && !degrees.has_minimum_degree(2), "Only selected neighbors count");
-            degrees.select_indices(std::vector<std::size_t>{0, 2});
-            check(!degrees.has_minimum_degree(1), "Outside neighbors cannot satisfy degree bound");
-            degrees.select_indices(std::vector<std::size_t>{0});
-            check(degrees.has_minimum_degree(0) && !degrees.has_minimum_degree(1), "Singleton degree is zero");
+        DegreeFilter degrees(ring, labels);
+        std::vector<std::size_t> full;
+        for (std::size_t i = 0; i < n; ++i) {
+            full.push_back(i);
         }
+        const std::vector<std::size_t> adjacent{0, n - 1};
+        const std::vector<std::size_t> isolated{0, 2};
+        const std::vector<std::size_t> singleton{0};
+        check(degrees.has_minimum_degree(full, 2) && !degrees.has_minimum_degree(full, 3), "Cycle degree is two");
+        check(degrees.has_minimum_degree(adjacent, 1) && !degrees.has_minimum_degree(adjacent, 2), "Selected edge, including bit 63");
+        check(!degrees.has_minimum_degree(isolated, 1), "Outside neighbors cannot satisfy degree bound");
+        check(!degrees.has_minimum_degree(std::vector<std::size_t>{1, 3}, 1), "Rejected candidate leaves no selected neighbors");
+        check(degrees.has_minimum_degree(singleton, 0) && !degrees.has_minimum_degree(singleton, 1), "Singleton degree is zero");
+        check(degrees.has_minimum_degree({}, 0) && !degrees.has_minimum_degree({}, 1), "Empty candidate bounds");
+        check(degrees.has_minimum_degree(full, 2), "Selection cleared after rejected candidates");
+
     }
 
     std::vector<std::pair<Vertex, Vertex>> path;

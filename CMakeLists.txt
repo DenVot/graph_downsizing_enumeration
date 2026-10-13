@@ -22,6 +22,7 @@ add_library(graph_downsizing_core
     src/alpha.cpp
     src/config.cpp
     src/connectivity.cpp
+    src/degree_filter.cpp
     src/graph.cpp
     src/global_cut.cpp
     src/maximal_kvcc_enumerator.cpp

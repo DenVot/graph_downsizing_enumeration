@@ -78,6 +78,7 @@ Arguments parse_arguments(int argc, char** argv) {
 void validate(const downsizing::Config& config) {
     std::cout << "Validation only: no enumeration, output files, or GitHub uploads.\n"
               << std::setprecision(15) << "alpha_step=" << config.alpha_step << " threads=" << config.threads
+              << " range_size=" << config.range_size
               << " checkpoint_interval_seconds=" << config.checkpoint_interval.count()
               << " github=" << (config.github.enabled ? "configured" : "disabled") << '\n';
     for (std::size_t i = 0; i < config.inputs.size(); ++i) {
@@ -191,6 +192,7 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
     try {
         logger.info(std::string("event=run_started mode=") + (restoring ? "resume" : "run") +
                     " checkpoint=" + checkpoint.path().string() + " workers=" + std::to_string(pool.size()) +
+                    " range_size=" + std::to_string(config.range_size) +
                     " log_interval_s=" + std::to_string(config.log_interval.count()) +
                     " checkpoint_interval_s=" + std::to_string(config.checkpoint_interval.count()));
         for (std::size_t i = 0; i < config.inputs.size(); ++i) {
@@ -203,7 +205,7 @@ void run(const downsizing::Config& config, const std::filesystem::path& resume,
             auto task = schedule.next();
             logger.context(graph_id, "build_tree");
             logger.info("event=tree_started minimum_r=" + std::to_string(task->r));
-            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, graph_id);
+            downsizing::ExactSolver solver(graph, task->r, pool, &checkpoint, graph_id, config.range_size);
             logger.info("event=tree_ready nodes=" + std::to_string(solver.tree().nodes.size()) +
                         " maximum_k=" + std::to_string(solver.tree().levels.size() - 1));
             const auto destination = downsizing::solution_path(config, i);

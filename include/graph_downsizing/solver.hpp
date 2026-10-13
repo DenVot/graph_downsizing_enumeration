@@ -23,7 +23,8 @@ using SolveProgressCallback = std::function<void(const SolveProgress&)>;
 class ExactSolver {
 public:
     ExactSolver(const Graph& graph, std::size_t minimum_size, WorkerPool& pool,
-                Checkpoint* checkpoint = nullptr, const std::string& graph_id = "");
+                Checkpoint* checkpoint = nullptr, const std::string& graph_id = "",
+                std::size_t range_size = default_range_size);
     [[nodiscard]] const Solution& solve(std::size_t r, SolveProgressCallback progress = {});
     [[nodiscard]] const SolutionsBySize& solutions() const noexcept { return solutions_; }
     [[nodiscard]] const NestingTree& tree() const noexcept { return tree_; }
@@ -31,6 +32,7 @@ public:
 private:
     const Graph& graph_;
     std::size_t minimum_size_;
+    std::size_t range_size_;
     NestingTree tree_;
     SolutionsBySize solutions_;
     Checkpoint* checkpoint_;

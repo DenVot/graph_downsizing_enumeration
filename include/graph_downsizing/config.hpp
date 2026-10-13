@@ -8,6 +8,8 @@
 
 namespace downsizing {
 
+inline constexpr std::size_t default_range_size = 131072;
+
 struct GitHubConfig {
     bool enabled = false;
     std::string repository_url;
@@ -23,6 +25,7 @@ struct Config {
     std::vector<std::filesystem::path> inputs;
     double alpha_step = 0.1;
     std::size_t threads = 1;
+    std::size_t range_size = default_range_size;
     std::filesystem::path working_directory;
     std::chrono::seconds checkpoint_interval{60};
     std::chrono::seconds log_interval{10};

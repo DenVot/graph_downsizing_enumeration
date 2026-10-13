@@ -99,6 +99,10 @@ void pool_and_search() {
     const auto right = std::make_shared<const VertexSet>(VertexSet{6,7,8,9,10,11});
     check(!parallel_p_downsize(cycle, {left,right}, 3, 2, pool, &stats) && stats.subsets_checked == 40 && stats.nodes_started == 2,
           "All nodes of an unsuccessful level must be exhausted");
+    check(!parallel_p_downsize(cycle, {left,right}, 3, 2, pool, &stats, nullptr, {}, {}, 3)
+          && stats.subsets_checked == 40 && stats.ranges_started == 14,
+          "Configured range size must partition each node without gaps");
+    invalid([&] { static_cast<void>(parallel_p_downsize(cycle, {node}, 5, 2, pool, nullptr, nullptr, {}, {}, 0)); });
     edges.clear();
     for (Vertex i = 0; i < 12; ++i) for (Vertex j = i + 1; j < 12; ++j) edges.emplace_back(i,j);
     const auto clique = Graph::from_edges(edges);

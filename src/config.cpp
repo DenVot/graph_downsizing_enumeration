@@ -147,7 +147,7 @@ Config read_config(const std::filesystem::path& path) {
     if (input.bad()) {
         throw std::runtime_error("Failed to read configuration file");
     }
-    check_keys(document, {"inputs", "input_directory", "alpha_step", "threads", "working_directory",
+    check_keys(document, {"inputs", "input_directory", "alpha_step", "threads", "range_size", "working_directory",
                           "checkpoint_interval_seconds", "log_interval_seconds", "github"}, "configuration");
 
     Config config{};
@@ -161,6 +161,8 @@ Config read_config(const std::filesystem::path& path) {
     (void)AlphaSchedule(config.alpha_step, 1);
     config.threads = static_cast<std::size_t>(positive_field(document, "threads",
         std::max(1U, std::thread::hardware_concurrency()), std::numeric_limits<std::size_t>::max()));
+    config.range_size = static_cast<std::size_t>(positive_field(document, "range_size",
+        default_range_size, std::numeric_limits<std::size_t>::max()));
     config.working_directory = resolve_path(base, string_field(document, "working_directory", "runs"));
     constexpr auto max_seconds = static_cast<std::uint64_t>(std::chrono::seconds::max().count());
     config.checkpoint_interval = std::chrono::seconds(static_cast<std::chrono::seconds::rep>(

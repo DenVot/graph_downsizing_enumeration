@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graph_downsizing/combinations.hpp"
+#include "graph_downsizing/config.hpp"
 #include "graph_downsizing/connectivity.hpp"
 #include "graph_downsizing/worker_pool.hpp"
 
@@ -39,5 +40,6 @@ struct SearchStats {
     const Graph& graph, const std::vector<std::shared_ptr<const VertexSet>>& nodes,
     std::size_t r, std::size_t k, WorkerPool& pool,
     SearchStats* stats = nullptr, Checkpoint* checkpoint = nullptr,
-    const std::string& prefix = {}, SearchProgressCallback progress = {});
+    const std::string& prefix = {}, SearchProgressCallback progress = {},
+    std::size_t range_size = default_range_size);
 } // namespace downsizing

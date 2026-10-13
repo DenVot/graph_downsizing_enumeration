@@ -1,5 +1,6 @@
 #include "graph_downsizing/parallel_search.hpp"
 #include "graph_downsizing/checkpoint.hpp"
+#include "graph_downsizing/degree_filter.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -86,9 +87,12 @@ public:
                 std::size_t r, std::size_t k, WorkerPool* pool, SearchStats* stats,
                 Checkpoint* checkpoint, const std::string& prefix,
                 const std::atomic<bool>* external_stop = nullptr, bool exact_key = false,
-                SearchProgressCallback progress = {})
+                SearchProgressCallback progress = {}, std::size_t range_size = default_range_size)
         : graph_(graph), r_(r), k_(k), pool_(pool), stats_(stats), checkpoint_(checkpoint),
-          external_stop_(external_stop), window_(pool ? 2 * pool->size() : 1), progress_(std::move(progress)) {
+          external_stop_(external_stop), window_(pool ? 2 * pool->size() : 1), range_size_(range_size), progress_(std::move(progress)) {
+        if (range_size_ == 0) {
+            throw std::invalid_argument("Range size must be positive");
+        }
         for (std::size_t i = 0; i < nodes.size(); ++i) {
             if (!nodes[i] || ordered_subset(graph, *nodes[i]) != *nodes[i]) {
                 throw std::invalid_argument("Parallel nodes must contain sorted unique vertex IDs");
@@ -243,9 +247,9 @@ private:
             }
             if (node.next_unassigned < node.total) {
                 const BigInt begin = node.next_unassigned;
-                // Small nodes also split across workers; large nodes use bounded 4096-subset jobs.
+                // Small nodes also split across workers; large nodes use the configured range limit.
                 const BigInt balanced = (node.total + window_ - 1) / window_;
-                const BigInt length = std::min(BigInt(4096), balanced);
+                const BigInt length = std::min(BigInt(range_size_), balanced);
                 const BigInt end = std::min(node.total, BigInt(begin + length));
                 node.ranges.emplace(begin, Range{begin, end, true});
                 node.next_unassigned = end;
@@ -288,16 +292,19 @@ private:
         const auto& vertices = *nodes_[id].vertices;
         auto indices = combination_at(vertices.size(), r_, next);
         VertexSet subset(r_);
+        DegreeFilter degree_filter(graph_, vertices);
         VertexFlow flow(graph_, vertices);
         while (next < end && !cancelled()) {
             if (checkpoint_) {
                 checkpoint_->check();
             }
-            for (std::size_t i = 0; i < r_; ++i) {
-                subset[i] = vertices[indices[i]];
+            bool found = degree_filter.has_minimum_degree(indices, k_);
+            if (found) {
+                flow.select_indices(indices);
+                for (std::size_t i = 0; i < r_; ++i) {
+                    subset[i] = vertices[indices[i]];
+                }
             }
-            flow.select_indices(indices);
-            bool found = flow.has_minimum_degree(k_);
             for (std::size_t i = 0; i < r_ && found; ++i) {
                 for (std::size_t j = i + 1; j < r_; ++j) {
                     if (checkpoint_) {
@@ -380,6 +387,7 @@ private:
     Checkpoint* checkpoint_;
     const std::atomic<bool>* external_stop_;
     std::size_t window_;
+    std::size_t range_size_;
     SearchProgressCallback progress_;
     std::size_t finished_nodes_ = 0;
     std::vector<Node> nodes_;
@@ -421,7 +429,7 @@ std::optional<VertexSet> p_downsize(const Graph& graph, const VertexSet& vertice
 std::optional<VertexSet> parallel_p_downsize(
     const Graph& graph, const std::vector<std::shared_ptr<const VertexSet>>& nodes,
     std::size_t r, std::size_t k, WorkerPool& pool, SearchStats* stats,
-    Checkpoint* checkpoint, const std::string& prefix, SearchProgressCallback progress) {
+    Checkpoint* checkpoint, const std::string& prefix, SearchProgressCallback progress, std::size_t range_size) {
     if (r == 0) {
         throw std::invalid_argument("Search requires positive r");
     }
@@ -431,7 +439,7 @@ std::optional<VertexSet> parallel_p_downsize(
     if (k >= r) {
         return std::nullopt;
     }
-    return RangeSearch(graph, nodes, r, k, &pool, stats, checkpoint, prefix, nullptr, false, std::move(progress)).run();
+    return RangeSearch(graph, nodes, r, k, &pool, stats, checkpoint, prefix, nullptr, false, std::move(progress), range_size).run();
 }
 
 } // namespace downsizing

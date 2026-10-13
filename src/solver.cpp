@@ -35,8 +35,8 @@ VertexSet connected_subset(const Graph& graph, std::size_t r) {
 } // namespace
 
 ExactSolver::ExactSolver(const Graph& graph, std::size_t minimum_size, WorkerPool& pool,
-                         Checkpoint* checkpoint, const std::string& graph_id)
-    : graph_(graph), minimum_size_(minimum_size), tree_(build_tree(graph, minimum_size, checkpoint, graph_id)),
+                         Checkpoint* checkpoint, const std::string& graph_id, std::size_t range_size)
+    : graph_(graph), minimum_size_(minimum_size), range_size_(range_size), tree_(build_tree(graph, minimum_size, checkpoint, graph_id)),
       checkpoint_(checkpoint), graph_id_(graph_id), pool_(pool) {
 }
 
@@ -92,7 +92,7 @@ const Solution& ExactSolver::solve(std::size_t r, SolveProgressCallback progress
                     progress(status);
                 }) : SearchProgressCallback{};
             if (auto witness = parallel_p_downsize(graph_, nodes, r, k, pool_, nullptr, checkpoint_,
-                    "search/" + graph_id_ + "/" + std::to_string(r) + "/" + std::to_string(k), level_progress)) {
+                    "search/" + graph_id_ + "/" + std::to_string(r) + "/" + std::to_string(k), level_progress, range_size_)) {
                 return finish(Solution{k, std::move(*witness)});
             }
             finished_levels += nodes.size();

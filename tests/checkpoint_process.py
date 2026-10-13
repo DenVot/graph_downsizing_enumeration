@@ -103,6 +103,7 @@ try:
         # Garbage left by an interrupted write is never read as committed progress.
         pathlib.Path(str(progress) + ".tmp").write_text("{incomplete")
         options["threads"] = 4
+        options["range_size"] = 4096
         config.write_text(json.dumps(options))
         process = start(config, checkpoint)
         wait_for(process, lambda: completed_subsets(document(progress).get("nodes", {}).get(key, {})) > first_cursor)

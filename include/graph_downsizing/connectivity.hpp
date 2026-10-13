@@ -30,8 +30,6 @@ public:
     // Sorted, distinct positions in vertices(); only this induced subset is active.
     void select_indices(std::span<const std::size_t> indices);
 
-    [[nodiscard]] bool has_minimum_degree(std::size_t k) const;
-
     [[nodiscard]] PairFlow between(Vertex source, Vertex target, std::size_t limit);
     [[nodiscard]] const VertexSet& vertices() const noexcept { return vertices_; }
 
@@ -53,7 +51,6 @@ private:
     VertexSet vertices_;
     std::vector<std::size_t> selected_;
     std::vector<unsigned char> active_;
-    std::vector<std::uint64_t> neighbor_masks_;
     std::map<Vertex, std::size_t> indices_;
     std::vector<std::vector<Edge>> network_;
     std::vector<std::size_t> level_;
